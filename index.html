@@ -196,11 +196,24 @@
         <div class="val" id="detail-val">—</div>
       </div>
     </div>
+    <div class="detail-daynav">
+      <button class="daynav-btn" id="detail-prev-day" aria-label="Previous day">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="daynav-label" id="detail-day-label">Today</div>
+      <button class="daynav-btn" id="detail-next-day" aria-label="Next day">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <button class="daynav-btn daynav-cal" id="detail-calendar-btn" aria-label="Jump to a date">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>
+      </button>
+      <input type="date" class="daynav-date-hidden" id="detail-date-input" aria-label="Jump to date">
+    </div>
     <div class="detail-body-wrap">
       <div class="detail-chart-card" id="detail-chart-card">
         <svg viewBox="0 0 300 120" preserveAspectRatio="none" id="detail-chart"></svg>
       </div>
-      <p class="detail-list-title">Today's entries</p>
+      <p class="detail-list-title" id="detail-list-title">Today's entries</p>
       <div id="detail-entries"></div>
     </div>
   </div>

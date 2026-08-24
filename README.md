@@ -156,6 +156,26 @@ directly in the sheet aren't read back into the app.
 Open the metric's detail screen (tap the bottom half of its card) and tap
 any entry in the list — it opens pre-filled, with a **Delete** button.
 
+### Logging for a past date
+
+Every entry form has a date field alongside the time field, defaulting to
+right now — change the date to log something for two days ago, last week,
+or any past date, not just today. Backdated entries count correctly toward
+that day's Trends average and total.
+
+### Browsing and editing past days
+
+The detail screen (tap the bottom half of a card) opens on today by
+default, but the row just below the value — the **‹ Today ›** bar — lets
+you move around:
+- Tap **‹** / **›** to step one day back or forward (forward is capped at
+  today; there's nothing to show in the future).
+- Tap the calendar icon to jump straight to any date.
+
+Whichever day you land on, that day's graph and entry list show up below,
+and tapping any entry opens it pre-filled for editing or deleting — exactly
+like today's entries do.
+
 ### Custom health parameters
 
 Beyond the four built-in cards, Settings → **Health parameters** lets you

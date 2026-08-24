@@ -57,11 +57,25 @@ function startOfDay(ts){ const d = new Date(ts); d.setHours(0,0,0,0); return d.g
 function isToday(ts){ return startOfDay(ts) === startOfDay(Date.now()); }
 function sameDay(ts, dateObj){ return startOfDay(ts) === startOfDay(dateObj.getTime()); }
 function toTimeInputValue(ts){ const d = new Date(ts); return pad2(d.getHours())+':'+pad2(d.getMinutes()); }
+function toDateInputValue(ts){ const d = new Date(ts); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 function combineWithTime(baseTs, timeStr){
   const d = new Date(baseTs);
   const parts = (timeStr||'').split(':');
   const h = parseInt(parts[0],10), m = parseInt(parts[1],10);
   if(!isNaN(h)) d.setHours(h, isNaN(m)?0:m, 0, 0);
+  return d.getTime();
+}
+// Lets an entry be backdated to any date, not just today — combines a
+// `<input type=date>` value with a `<input type=time>` value into one
+// timestamp, falling back to the given timestamp's own time-of-day if no
+// time was entered (shouldn't normally happen since the time field always
+// has a value, but keeps this safe either way).
+function combineDateTime(dateStr, timeStr, fallbackTs){
+  const d = dateStr ? new Date(dateStr+'T00:00:00') : new Date(fallbackTs);
+  const parts = (timeStr||'').split(':');
+  const h = parseInt(parts[0],10), m = parseInt(parts[1],10);
+  if(!isNaN(h)) d.setHours(h, isNaN(m)?0:m, 0, 0);
+  else { const f = new Date(fallbackTs); d.setHours(f.getHours(), f.getMinutes(), 0, 0); }
   return d.getTime();
 }
 function avg(arr){ return arr.reduce((s,v)=>s+v,0) / (arr.length||1); }
@@ -163,6 +177,7 @@ function allMetricTypes(){
 let currentSheetKind = null;   // 'liquid' | 'urine' | 'bp' | 'sugar' | 'alarm'
 let currentEditId = null;      // entry id or alarm id being edited, else null
 let currentDetailType = null;
+let currentDetailDate = null;  // start-of-day ts of the day being browsed in the detail screen
 let currentTrendRange = 7;
 let alarmCheckInterval = null;
 let pendingUnlockAction = null; // 'setup-first' | 'setup-confirm' | 'unlock'
@@ -267,7 +282,7 @@ function renderAll(){
   renderTrends();
   renderAlarmsList();
   if(currentDetailType && $('#detail').classList.contains('show')){
-    openDetail(currentDetailType);
+    openDetail(currentDetailType, currentDetailDate);
   }
 }
 
@@ -325,7 +340,13 @@ function fieldsHtmlFor(kind, existing){
   }
 
   const timeVal = existing ? toTimeInputValue(existing.ts) : toTimeInputValue(Date.now());
-  const timeField = `<div class="field-label">When</div><div class="input-row"><input type="time" id="entry-time" value="${timeVal}"></div>`;
+  const dateVal = existing ? toDateInputValue(existing.ts) : toDateInputValue(Date.now());
+  const timeField = `
+      <div class="field-label">When <span style="text-transform:none;font-weight:400;">(any past date works)</span></div>
+      <div class="when-row">
+        <div class="input-row"><input type="date" id="entry-date" value="${dateVal}" max="${toDateInputValue(Date.now())}"></div>
+        <div class="input-row"><input type="time" id="entry-time" value="${timeVal}"></div>
+      </div>`;
 
   if(kind === 'bp'){
     return `
@@ -479,10 +500,13 @@ function saveEntry(){
   if(currentSheetKind === 'new-metric'){ saveMetricFromSheet(); return; }
 
   const note = $('#sheet-note').value.trim();
+  const dateInput = $('#entry-date');
   const timeInput = $('#entry-time');
   const existing = currentEditId ? DB.getEntries().find(e=>e.id===currentEditId) : null;
   const baseTs = existing ? existing.ts : Date.now();
-  const ts = timeInput && timeInput.value ? combineWithTime(baseTs, timeInput.value) : baseTs;
+  let ts = baseTs;
+  if(dateInput && dateInput.value) ts = combineDateTime(dateInput.value, timeInput ? timeInput.value : '', baseTs);
+  else if(timeInput && timeInput.value) ts = combineWithTime(baseTs, timeInput.value);
 
   let entry = { id: currentEditId || genId(), type: currentSheetKind, ts, note, updatedAt: Date.now() };
 
@@ -611,8 +635,8 @@ function xPositionsByTime(entries){
 function emptyChartSvg(msg){
   return `<text x="150" y="60" text-anchor="middle" fill="var(--text-dim)" font-size="13" font-family="var(--font-body)">${escapeHtml(msg)}</text>`;
 }
-function buildBarChart(entries, colorVar){
-  if(!entries.length) return emptyChartSvg('No entries logged today');
+function buildBarChart(entries, colorVar, emptyMsg){
+  if(!entries.length) return emptyChartSvg(emptyMsg || 'No entries logged today');
   const xs = xPositionsByTime(entries);
   const max = Math.max(...entries.map(e=>e.amount), 1);
   const baseline = 90, top = 8;
@@ -630,9 +654,9 @@ function buildBarChart(entries, colorVar){
 function pointsToPath(points){
   return 'M' + points.map(p => p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L');
 }
-function buildBpChart(entries, colorVar){
+function buildBpChart(entries, colorVar, emptyMsg){
   colorVar = colorVar || '--red';
-  if(!entries.length) return emptyChartSvg('No readings logged today');
+  if(!entries.length) return emptyChartSvg(emptyMsg || 'No readings logged today');
   const xs = xPositionsByTime(entries);
   const sysVals = entries.map(e=>e.systolic), diaVals = entries.map(e=>e.diastolic);
   const all = sysVals.concat(diaVals);
@@ -650,9 +674,9 @@ function buildBpChart(entries, colorVar){
   entries.forEach((e,i)=> out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`);
   return out;
 }
-function buildSugarChart(entries, colorVar){
+function buildSugarChart(entries, colorVar, emptyMsg){
   colorVar = colorVar || '--green';
-  if(!entries.length) return emptyChartSvg('No readings logged today');
+  if(!entries.length) return emptyChartSvg(emptyMsg || 'No readings logged today');
   const xs = xPositionsByTime(entries);
   const vals = entries.map(e=>e.value);
   const lo = Math.min(...vals) - 10, hi = Math.max(...vals) + 10;
@@ -680,41 +704,73 @@ function detailEntryRow(type, e){
     </div>`;
 }
 
-function openDetail(type){
+// A short, human label for the day-nav row: "Today", "Yesterday", or a
+// compact date otherwise.
+function dayNavLabel(ts){
+  if(isToday(ts)) return 'Today';
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+  if(sameDay(ts, yesterday)) return 'Yesterday';
+  return new Date(ts).toLocaleDateString([], {weekday:'short', day:'numeric', month:'short'});
+}
+
+// `dateTs` is any timestamp that falls on the day to browse to — defaults
+// to today. Lets the detail screen show (and let you edit/delete) entries
+// from any past day, not just today, via the prev/next arrows or the
+// calendar-jump button.
+function openDetail(type, dateTs){
   currentDetailType = type;
+  currentDetailDate = startOfDay(dateTs != null ? dateTs : Date.now());
   const meta = getMetricMeta(type);
   if(!meta) return;
-  const todaysEntries = DB.getEntries().filter(e=>e.type===type && isToday(e.ts)).sort((a,b)=>a.ts-b.ts);
+  const onToday = isToday(currentDetailDate);
+  const dayDate = new Date(currentDetailDate);
+  const dayEntries = DB.getEntries().filter(e=>e.type===type && sameDay(e.ts, dayDate)).sort((a,b)=>a.ts-b.ts);
 
   $('#detail-cat').textContent = meta.label;
-  $('#detail-val').textContent = detailHeaderValue(type, todaysEntries, meta);
+  $('#detail-val').textContent = detailHeaderValue(type, dayEntries, meta, onToday);
+  $('#detail-day-label').textContent = dayNavLabel(currentDetailDate);
+  const dateInput = $('#detail-date-input');
+  dateInput.max = toDateInputValue(Date.now());
+  dateInput.value = toDateInputValue(currentDetailDate);
+  $('#detail-next-day').disabled = onToday;
+  $('#detail-list-title').textContent = onToday ? "Today's entries" : `${dayNavLabel(currentDetailDate)}'s entries`;
 
+  const emptyMsg = onToday ? undefined : 'No entries logged on this day';
   let chartSvg;
-  if(type==='liquid' || type==='urine') chartSvg = buildBarChart(todaysEntries, meta.colorVar);
-  else if(type==='bp') chartSvg = buildBpChart(todaysEntries, meta.colorVar);
-  else chartSvg = buildSugarChart(todaysEntries, meta.colorVar);
+  if(type==='liquid' || type==='urine') chartSvg = buildBarChart(dayEntries, meta.colorVar, emptyMsg);
+  else if(type==='bp') chartSvg = buildBpChart(dayEntries, meta.colorVar, emptyMsg);
+  else chartSvg = buildSugarChart(dayEntries, meta.colorVar, emptyMsg);
   $('#detail-chart').innerHTML = chartSvg;
 
-  $('#detail-entries').innerHTML = todaysEntries.length
-    ? todaysEntries.slice().reverse().map(e=>detailEntryRow(type,e)).join('')
-    : '<p class="empty-hint">No entries logged today.</p>';
+  $('#detail-entries').innerHTML = dayEntries.length
+    ? dayEntries.slice().reverse().map(e=>detailEntryRow(type,e)).join('')
+    : `<p class="empty-hint">No entries logged ${onToday ? 'today' : 'on this day'}.</p>`;
 
   $('#detail').classList.add('show');
 }
-function detailHeaderValue(type, todaysEntries, meta){
-  if(!todaysEntries.length) return 'No entries today';
+function detailHeaderValue(type, dayEntries, meta, onToday){
+  if(!dayEntries.length) return onToday ? 'No entries today' : 'No entries';
   if(type==='liquid' || type==='urine'){
-    const total = todaysEntries.reduce((s,e)=>s+e.amount,0);
-    return `${total.toLocaleString()} mL today`;
+    const total = dayEntries.reduce((s,e)=>s+e.amount,0);
+    return `${total.toLocaleString()} mL` + (onToday ? ' today' : '');
   }
-  const last = todaysEntries[todaysEntries.length-1];
+  const last = dayEntries[dayEntries.length-1];
   if(type==='bp') return `${last.systolic} / ${last.diastolic} mmHg` + (last.pulse?` · pulse ${last.pulse}`:'');
   if(type==='sugar') return `${last.value} mg/dL · ${sugarContextLabel(last.context)}`;
   return `${last.value} ${meta ? meta.unit : ''}`.trim();
 }
+// Moves the browsed day by `deltaDays` (negative for back). Refuses to go
+// past today — there's nothing to show in the future.
+function shiftDetailDay(deltaDays){
+  const d = new Date(currentDetailDate);
+  d.setDate(d.getDate() + deltaDays);
+  if(startOfDay(d.getTime()) > startOfDay(Date.now())) return;
+  openDetail(currentDetailType, d.getTime());
+}
 function closeDetail(){
   $('#detail').classList.remove('show');
   currentDetailType = null;
+  currentDetailDate = null;
 }
 
 /* =========================================================================
@@ -1208,6 +1264,17 @@ function wireEvents(){
   $('#detail-entries').addEventListener('click', (e)=>{
     const row = e.target.closest('[data-entry-id]');
     if(row) openSheet(currentDetailType, row.dataset.entryId);
+  });
+  $('#detail-prev-day').addEventListener('click', ()=> shiftDetailDay(-1));
+  $('#detail-next-day').addEventListener('click', ()=> shiftDetailDay(1));
+  $('#detail-calendar-btn').addEventListener('click', ()=>{
+    const input = $('#detail-date-input');
+    if(input.showPicker){ try{ input.showPicker(); } catch(e){ input.focus(); } }
+    else { input.focus(); input.click(); }
+  });
+  $('#detail-date-input').addEventListener('change', (e)=>{
+    if(!e.target.value) return;
+    openDetail(currentDetailType, new Date(e.target.value+'T00:00:00').getTime());
   });
 
   // Sheet

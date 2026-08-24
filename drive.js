@@ -10,7 +10,7 @@
    ========================================================================= */
 
 const DRIVE_CONFIG = {
-  CLIENT_ID: '724605143169-61ikt0nqu8i0j0rev323itqetk9phl72.apps.googleusercontent.com,
+  CLIENT_ID: 'CLIENT_ID: '724605143169-61ikt0nqu8i0j0rev323itqetk9phl72.apps.googleusercontent.com',
   SCOPES: 'https://www.googleapis.com/auth/drive.file',
   SHEET_NAME: 'Vitals Health Log',
   SHEET_TAB: 'Sheet1'

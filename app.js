@@ -174,13 +174,13 @@ function allMetricTypes(){
 /* ---------------------------------------------------------------------
    State
    --------------------------------------------------------------------- */
-let currentSheetKind = null;   // 'liquid' | 'urine' | 'bp' | 'sugar' | 'alarm'
-let currentEditId = null;      // entry id or alarm id being edited, else null
+let currentSheetKind = null;
+let currentEditId = null;
 let currentDetailType = null;
-let currentDetailDate = null;  // start-of-day ts of the day being browsed in the detail screen
+let currentDetailDate = null;
 let currentTrendRange = 7;
 let alarmCheckInterval = null;
-let pendingUnlockAction = null; // 'setup-first' | 'setup-confirm' | 'unlock'
+let pendingUnlockAction = null;
 let pinBuffer = '';
 let pinFirstEntry = '';
 
@@ -212,7 +212,6 @@ function computeHomeAggregate(type){
       timeText: `${sugarContextLabel(last.context)} · ${formatTime(last.ts)}`
     };
   }
-  // custom parameter (creatinine, eGFR, or anything else the user defined)
   const meta = getMetricMeta(type);
   return {
     valueHtml: `${last.value}<small>${escapeHtml(meta ? meta.unit : '')}</small>`,
@@ -358,7 +357,7 @@ function fieldsHtmlFor(kind, existing){
       <div class="input-row"><input type="number" id="bp-pulse" placeholder="72" inputmode="numeric" value="${existing&&existing.pulse?existing.pulse:''}"><span class="unit">bpm</span></div>
       ${timeField}`;
   }
-  if(kind === 'sugar'){
+     if(kind === 'sugar'){
     return `
       <div class="field-label">Glucose</div>
       <div class="input-row"><input type="number" id="sugar-val" placeholder="100" inputmode="numeric" value="${existing?existing.value:''}"><span class="unit">mg/dL</span></div>
@@ -384,7 +383,6 @@ function fieldsHtmlFor(kind, existing){
       ${timeField}`;
   }
 
-  // a user-defined custom parameter (creatinine, eGFR, ...) — one numeric value
   const meta = getMetricMeta(kind) || {unit:''};
   return `
     <div class="field-label">Value</div>
@@ -451,11 +449,6 @@ function attachCustomAmountSync(){
   });
 }
 
-// Single delegated handler for every chip inside the sheet — handles both
-// "pick one" groups (amount presets, drink type, sugar context) and the
-// "toggle many" alarm day-of-week row. Wired inside init() via wireEvents()
-// is not used here because #sheet-fields is replaced wholesale on every
-// openSheet() call — delegation from a stable ancestor keeps it working.
 function wireSheetFieldsDelegation(){
   $('#sheet-fields').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
@@ -531,7 +524,6 @@ function saveEntry(){
     const cchip = $('#sugar-chips .chip.selected');
     entry.context = cchip ? sugarKeyFromLabel(cchip.textContent) : 'fasting';
   } else {
-    // a user-defined custom parameter
     const val = parseFloat($('#metric-val').value);
     if(isNaN(val)){ flashSheetError('Enter a value'); return; }
     entry.value = val;
@@ -587,9 +579,11 @@ function saveMetricFromSheet(){
 
   let metrics = DB.getCustomMetrics();
   const idx = metrics.findIndex(m=>m.id===currentEditId);
-  const metric = { id: currentEditId || genId(), name, unit, colorClass };
+  const metric = { id: currentEditId || genId(), name, unit, colorClass, updatedAt: Date.now() };
   if(idx >= 0) metrics[idx] = metric; else metrics.push(metric);
   DB.saveCustomMetrics(metrics);
+
+  window.dispatchEvent(new CustomEvent('vitals-local-data-changed'));
 
   closeSheet();
   renderAll();
@@ -617,12 +611,8 @@ function deleteCurrent(){
 }
 
 /* =========================================================================
-   DETAIL DRILL-DOWN (per-metric graph + today's entries)
+   DETAIL DRILL-DOWN
    ========================================================================= */
-// Positions points along the chart's x-axis by their actual time of day,
-// not just by index — so two readings taken minutes apart sit close
-// together and readings hours apart sit far apart, instead of always being
-// spaced equally regardless of when they really happened.
 function xPositionsByTime(entries){
   const n = entries.length;
   if(n <= 1) return [150];
@@ -704,20 +694,13 @@ function detailEntryRow(type, e){
     </div>`;
 }
 
-// A short, human label for the day-nav row: "Today", "Yesterday", or a
-// compact date otherwise.
 function dayNavLabel(ts){
   if(isToday(ts)) return 'Today';
   const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
   if(sameDay(ts, yesterday)) return 'Yesterday';
   return new Date(ts).toLocaleDateString([], {weekday:'short', day:'numeric', month:'short'});
 }
-
-// `dateTs` is any timestamp that falls on the day to browse to — defaults
-// to today. Lets the detail screen show (and let you edit/delete) entries
-// from any past day, not just today, via the prev/next arrows or the
-// calendar-jump button.
-function openDetail(type, dateTs){
+  function openDetail(type, dateTs){
   currentDetailType = type;
   currentDetailDate = startOfDay(dateTs != null ? dateTs : Date.now());
   const meta = getMetricMeta(type);
@@ -759,8 +742,6 @@ function detailHeaderValue(type, dayEntries, meta, onToday){
   if(type==='sugar') return `${last.value} mg/dL · ${sugarContextLabel(last.context)}`;
   return `${last.value} ${meta ? meta.unit : ''}`.trim();
 }
-// Moves the browsed day by `deltaDays` (negative for back). Refuses to go
-// past today — there's nothing to show in the future.
 function shiftDetailDay(deltaDays){
   const d = new Date(currentDetailDate);
   d.setDate(d.getDate() + deltaDays);
@@ -776,11 +757,6 @@ function closeDetail(){
 /* =========================================================================
    TRENDS
    ========================================================================= */
-// `values` is one entry per day in the trend range (nulls for days with no
-// data). x-position is based on each value's real day-index in that range,
-// not on its position among only the present values — so a two-day gap
-// between readings actually shows as a wider gap on the chart, not the same
-// spacing as two readings a day apart.
 function buildSparkline(values, colorVar){
   const n = values.length;
   const presentIdx = [];
@@ -806,9 +782,6 @@ function emptyChartSvg64(msg){
   return `<text x="150" y="34" text-anchor="middle" fill="var(--text-dim)" font-size="12" font-family="var(--font-body)">${escapeHtml(msg)}</text>`;
 }
 
-// Per-day series for one metric type across the trend date range: a running
-// total for the two volume metrics (liquid/urine), a daily average for
-// everything else (bp uses systolic; sugar and custom metrics use `.value`).
 function dailySeriesFor(type, dates, list){
   if(type==='liquid' || type==='urine'){
     return dates.map(d => list.filter(e=>sameDay(e.ts,d)).reduce((s,e)=>s+e.amount,0));
@@ -905,16 +878,11 @@ function isFiredToday(alarm){
 function markFired(alarm){
   const log = DB.getFiredLog();
   log[alarm.id+'|'+todayKey()] = true;
-  // keep the log small — drop anything not from today or yesterday
   const keep = {};
   Object.keys(log).forEach(k=>{ if(k.endsWith(todayKey())) keep[k]=true; });
   keep[alarm.id+'|'+todayKey()] = true;
   DB.saveFiredLog(keep);
 }
-// Web apps can't assign a custom ringtone file to the OS notification itself
-// (no browser exposes that). What we CAN do: play one of a few built-in
-// tones ourselves whenever the app is open/foregrounded, and tell the OS
-// notification whether to make its own default sound or stay silent.
 function playTone(name){
   if(!name || name === 'silent') return;
   try{
@@ -944,8 +912,6 @@ function fireAlarm(alarm){
   markFired(alarm);
   const tone = alarm.tone || 'chime';
 
-  // Audible in-app tone — works regardless of Notification permission,
-  // but only while this tab/PWA is actually open.
   if(document.visibilityState === 'visible') playTone(tone);
 
   if(!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -1005,46 +971,19 @@ function updatePinDots(count, errorState){
 }
 function startLockFlow(){
   const settings = DB.getSettings();
-
-  pinBuffer = '';
-  pinFirstEntry = '';
-  updatePinDots(0, false);
-
+  pinBuffer = ''; pinFirstEntry = '';
+  updatePinDots(0,false);
   if(!settings.pinHash){
-
     pendingUnlockAction = 'setup-first';
     $('#lock-sub').textContent = 'Create a passcode';
-
-  }else{
-
+  } else {
     pendingUnlockAction = 'unlock';
-    $('#lock-sub').textContent =
-      'Use fingerprint or enter your passcode';
+    $('#lock-sub').textContent = 'Use fingerprint or enter your passcode';
   }
-
   $('#lock').classList.remove('hidden');
   updateBiometricKeyVisibility();
-
-  /*
-   * Automatically try fingerprint.
-   *
-   * IMPORTANT:
-   * The timeout guarantees that the biometric attempt cannot
-   * leave the lock screen unusable. The passcode remains available.
-   */
-  if(
-    pendingUnlockAction === 'unlock' &&
-    settings.bioEnabled &&
-    settings.bioCredId &&
-    window.PublicKeyCredential &&
-    navigator.credentials
-  ){
-
-    setTimeout(() => {
-
-      tryBiometricUnlock(true);
-
-    }, 300);
+  if(pendingUnlockAction === 'unlock' && settings.bioEnabled && settings.bioCredId && window.PublicKeyCredential && navigator.credentials){
+    setTimeout(()=>tryBiometricUnlock(true), 300);
   }
 }
 function updateBiometricKeyVisibility(){
@@ -1087,7 +1026,7 @@ async function handlePinComplete(){
     unlockApp();
     return;
   }
-  // unlock
+
   const hash = await sha256Hex(pinBuffer + settings.pinSalt);
   if(hash === settings.pinHash){
     unlockApp();
@@ -1100,7 +1039,7 @@ async function handlePinComplete(){
 function unlockApp(){
   $('#lock').classList.add('hidden');
   pinBuffer = ''; pinFirstEntry = '';
-  renderSettingsPanel(); // reflect a just-created/changed PIN immediately
+  renderSettingsPanel();
 }
 function lockAppNow(){
   startLockFlow();
@@ -1148,81 +1087,29 @@ async function enableBiometric(){
   }
 }
 async function tryBiometricUnlock(autoStart = false){
-
   const settings = DB.getSettings();
-
-  if(
-    !settings.bioEnabled ||
-    !settings.bioCredId
-  ){
-    return false;
-  }
-
+  if(!settings.bioEnabled || !settings.bioCredId) return false;
   let timer = null;
-
   try{
-
-    /*
-     * Give the browser a short window to complete biometric
-     * authentication. If it doesn't, abort and leave the
-     * passcode keypad fully usable.
-     */
     const controller = new AbortController();
-
-    timer = setTimeout(() => {
-      controller.abort();
-    }, autoStart ? 5000 : 60000);
-
-    const challenge =
-      crypto.getRandomValues(
-        new Uint8Array(32)
-      );
-
-    const cred =
-      await navigator.credentials.get({
-
-        publicKey: {
-
-          challenge,
-
-          allowCredentials: [{
-            id: b64urlToBytes(
-              settings.bioCredId
-            ),
-            type: 'public-key'
-          }],
-
-          userVerification: 'required',
-
-          timeout: autoStart ? 5000 : 60000,
-
-          signal: controller.signal
-        }
-      });
-
+    const timeout = autoStart ? 5000 : 60000;
+    timer = setTimeout(()=>controller.abort(), timeout);
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const cred = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        allowCredentials: [{ id: b64urlToBytes(settings.bioCredId), type:'public-key' }],
+        userVerification: 'required',
+        timeout,
+        signal: controller.signal
+      }
+    });
     clearTimeout(timer);
-
-    if(cred){
-
-      unlockApp();
-      return true;
-    }
-
-  }catch(e){
-
-    if(timer){
-      clearTimeout(timer);
-    }
-
-    /*
-     * Automatic biometric failure/cancellation is NOT an error
-     * for the user. Simply leave the passcode screen available.
-     */
-    console.log(
-      'Vitals: biometric unavailable/cancelled; passcode remains available.'
-    );
+    if(cred){ unlockApp(); return true; }
+  } catch(e){
+    if(timer) clearTimeout(timer);
+    console.log('Vitals: biometric unavailable/cancelled; passcode remains available.');
   }
-
   return false;
 }
 
@@ -1324,21 +1211,17 @@ function csvCell(v){
 function wireEvents(){
   wireSheetFieldsDelegation();
 
-  // Keypad
   $all('.key[data-k]').forEach(btn=>{
     btn.addEventListener('click', ()=> onKeypadPress(btn.dataset.k));
   });
   $('#backspace-key').addEventListener('click', onBackspace);
   $('#biometric-key').addEventListener('click', tryBiometricUnlock);
 
-  // Header
   $('#lock-now-btn').addEventListener('click', lockAppNow);
   $('#settings-btn').addEventListener('click', ()=> showPanel('settings'));
 
-  // Tab bar
   $all('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
 
-  // Home: open sheet / detail (event delegation)
   $('#home-grid').addEventListener('click', (e)=>{
     const openSheetBtn = e.target.closest('[data-open-sheet]');
     if(openSheetBtn){ openSheet(openSheetBtn.dataset.openSheet); return; }
@@ -1346,10 +1229,8 @@ function wireEvents(){
     if(openDetailBtn){ openDetail(openDetailBtn.dataset.openDetail); }
   });
 
-  // "See all" -> alarms tab
   $all('[data-nav]').forEach(el=> el.addEventListener('click', ()=> showPanel(el.dataset.nav)));
 
-  // Detail drill-down
   $('#detail-back').addEventListener('click', closeDetail);
   $('#detail-entries').addEventListener('click', (e)=>{
     const row = e.target.closest('[data-entry-id]');
@@ -1367,21 +1248,18 @@ function wireEvents(){
     openDetail(currentDetailType, new Date(e.target.value+'T00:00:00').getTime());
   });
 
-  // Sheet
   $('#scrim').addEventListener('click', closeSheet);
   $('#sheet-save-btn').addEventListener('click', saveEntry);
   $('#sheet-delete-btn').addEventListener('click', deleteCurrent);
 
-  // Trends range toggle
   $('#trend-range-toggle').addEventListener('click', ()=>{
     currentTrendRange = currentTrendRange === 7 ? 30 : 7;
     renderTrends();
   });
 
-  // Alarms
   $('#new-alarm-btn').addEventListener('click', async ()=>{
     const perm = await ensureNotificationPermission();
-    if(perm !== 'granted') { /* still let them create the alarm; hint explains limitation */ }
+    if(perm !== 'granted') { }
     openSheet('alarm');
   });
   $('#alarms-list').addEventListener('click', (e)=>{
@@ -1397,7 +1275,6 @@ function wireEvents(){
     if(edit) openSheet('alarm', edit.dataset.editAlarm);
   });
 
-  // Settings
   $('#theme-select').addEventListener('change', (e)=>{
     const settings = DB.getSettings();
     settings.theme = e.target.value;
@@ -1432,14 +1309,12 @@ function wireEvents(){
   });
   $('#export-btn').addEventListener('click', exportCsv);
 
-  // Custom health parameters
   $('#new-metric-btn').addEventListener('click', ()=> openSheet('new-metric'));
   $('#custom-metrics-list').addEventListener('click', (e)=>{
     const row = e.target.closest('[data-edit-metric]');
     if(row) openSheet('new-metric', row.dataset.editMetric);
   });
 
-  // Tab colors
   $('#tab-colors-list').addEventListener('click', (e)=>{
     const swatch = e.target.closest('[data-recolor]');
     if(swatch) setTabColor(swatch.dataset.recolor, swatch.dataset.color);
@@ -1447,13 +1322,27 @@ function wireEvents(){
 
   window.addEventListener('vitals-drive-status', renderSettingsPanel);
 
+  window.addEventListener('vitals-drive-data-changed', ()=>{
+    renderAll();
+    renderSettingsPanel();
+  });
+
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible'){
       checkAlarmsTick();
-      if(window.VitalsDrive) window.VitalsDrive.flushQueue();
+      if(window.VitalsDrive){
+        if(window.VitalsDrive.syncNow) window.VitalsDrive.syncNow();
+        if(window.VitalsDrive.flushQueue) window.VitalsDrive.flushQueue();
+      }
     }
   });
-  window.addEventListener('online', ()=>{ if(window.VitalsDrive) window.VitalsDrive.flushQueue(); });
+
+  window.addEventListener('online', ()=>{
+    if(window.VitalsDrive){
+      if(window.VitalsDrive.syncNow) window.VitalsDrive.syncNow();
+      if(window.VitalsDrive.flushQueue) window.VitalsDrive.flushQueue();
+    }
+  });
 }
 
 /* =========================================================================

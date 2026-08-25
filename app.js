@@ -572,22 +572,102 @@ function saveAlarmFromSheet(){
 function saveMetricFromSheet(){
   const name = $('#metric-name').value.trim();
   const unit = $('#metric-unit').value.trim();
-  if(!name){ flashSheetError('Give it a name'); return; }
-  if(!unit){ flashSheetError('Give it a unit, e.g. mg/dL'); return; }
-  const colorChip = $('#metric-color-chips .chip.selected');
-  const colorClass = colorChip ? colorChip.dataset.color : METRIC_COLORS[0][0];
 
-  let metrics = DB.getCustomMetrics();
-  const idx = metrics.findIndex(m=>m.id===currentEditId);
-  const metric = { id: currentEditId || genId(), name, unit, colorClass, updatedAt: Date.now() };
-  if(idx >= 0) metrics[idx] = metric; else metrics.push(metric);
+  if(!name){
+    flashSheetError('Give it a name');
+    return;
+  }
+
+  if(!unit){
+    flashSheetError('Give it a unit, e.g. mg/dL');
+    return;
+  }
+
+  const colorChip =
+    $('#metric-color-chips .chip.selected');
+
+  const colorClass =
+    colorChip
+      ? colorChip.dataset.color
+      : METRIC_COLORS[0][0];
+
+  let metrics =
+    DB.getCustomMetrics();
+
+  /*
+   * Prevent duplicate metric names.
+   *
+   * Serum Creatinine, serum creatinine and
+   * SERUM CREATININE are treated as the same metric.
+   */
+  const normalizedName =
+    name
+      .trim()
+      .replace(/\s+/g,' ')
+      .toLowerCase();
+
+  const duplicateIndex =
+    metrics.findIndex(m =>
+      m.id !== currentEditId &&
+      String(m.name || '')
+        .trim()
+        .replace(/\s+/g,' ')
+        .toLowerCase() === normalizedName
+    );
+
+  if(duplicateIndex >= 0){
+    flashSheetError(
+      'A parameter with this name already exists'
+    );
+    return;
+  }
+
+  const existing =
+    currentEditId
+      ? metrics.find(m => m.id === currentEditId)
+      : null;
+
+  const metric = {
+    id:
+      currentEditId || genId(),
+
+    name,
+
+    unit,
+
+    colorClass,
+
+    updatedAt:
+      Date.now()
+  };
+
+  const idx =
+    metrics.findIndex(
+      m => m.id === metric.id
+    );
+
+  if(idx >= 0){
+    metrics[idx] = metric;
+  }else{
+    metrics.push(metric);
+  }
+
   DB.saveCustomMetrics(metrics);
 
-  window.dispatchEvent(new CustomEvent('vitals-local-data-changed'));
-
   closeSheet();
+
   renderAll();
+
   renderSettingsPanel();
+
+  /*
+   * Tell Drive that the local dataset changed.
+   */
+  window.dispatchEvent(
+    new CustomEvent(
+      'vitals-local-data-changed'
+    )
+  );
 }
 
 function deleteCurrent(){

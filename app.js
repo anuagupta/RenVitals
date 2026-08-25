@@ -1005,17 +1005,42 @@ function updatePinDots(count, errorState){
 }
 function startLockFlow(){
   const settings = DB.getSettings();
-  pinBuffer = ''; pinFirstEntry = '';
-  updatePinDots(0,false);
+
+  pinBuffer = '';
+  pinFirstEntry = '';
+
+  updatePinDots(0, false);
+
   if(!settings.pinHash){
+
     pendingUnlockAction = 'setup-first';
     $('#lock-sub').textContent = 'Create a passcode';
-  } else {
+
+  }else{
+
     pendingUnlockAction = 'unlock';
-    $('#lock-sub').textContent = 'Enter your passcode';
+    $('#lock-sub').textContent =
+      'Use fingerprint or enter your passcode';
   }
+
   $('#lock').classList.remove('hidden');
+
   updateBiometricKeyVisibility();
+
+  // Automatically request fingerprint/biometric authentication
+  // when it has previously been enabled.
+  if(
+    pendingUnlockAction === 'unlock' &&
+    settings.bioEnabled &&
+    settings.bioCredId &&
+    window.PublicKeyCredential &&
+    navigator.credentials
+  ){
+    setTimeout(() => {
+      tryBiometricUnlock();
+    }, 150);
+  }
+}
 }
 function updateBiometricKeyVisibility(){
   const settings = DB.getSettings();

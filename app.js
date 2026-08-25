@@ -1005,17 +1005,47 @@ function updatePinDots(count, errorState){
 }
 function startLockFlow(){
   const settings = DB.getSettings();
-  pinBuffer = ''; pinFirstEntry = '';
-  updatePinDots(0,false);
+
+  pinBuffer = '';
+  pinFirstEntry = '';
+  updatePinDots(0, false);
+
   if(!settings.pinHash){
+
     pendingUnlockAction = 'setup-first';
     $('#lock-sub').textContent = 'Create a passcode';
-  } else {
+
+  }else{
+
     pendingUnlockAction = 'unlock';
-    $('#lock-sub').textContent = 'Enter your passcode';
+    $('#lock-sub').textContent =
+      'Use fingerprint or enter your passcode';
   }
+
   $('#lock').classList.remove('hidden');
   updateBiometricKeyVisibility();
+
+  /*
+   * Automatically try fingerprint.
+   *
+   * IMPORTANT:
+   * The timeout guarantees that the biometric attempt cannot
+   * leave the lock screen unusable. The passcode remains available.
+   */
+  if(
+    pendingUnlockAction === 'unlock' &&
+    settings.bioEnabled &&
+    settings.bioCredId &&
+    window.PublicKeyCredential &&
+    navigator.credentials
+  ){
+
+    setTimeout(() => {
+
+      tryBiometricUnlock(true);
+
+    }, 300);
+  }
 }
 function updateBiometricKeyVisibility(){
   const settings = DB.getSettings();

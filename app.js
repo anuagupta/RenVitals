@@ -1147,23 +1147,83 @@ async function enableBiometric(){
     return false;
   }
 }
-async function tryBiometricUnlock(){
+async function tryBiometricUnlock(autoStart = false){
+
   const settings = DB.getSettings();
-  if(!settings.bioEnabled || !settings.bioCredId) return;
-  try{
-    const challenge = crypto.getRandomValues(new Uint8Array(32));
-    const cred = await navigator.credentials.get({
-      publicKey: {
-        challenge,
-        allowCredentials: [{ id: b64urlToBytes(settings.bioCredId), type:'public-key' }],
-        userVerification: 'required',
-        timeout: 60000
-      }
-    });
-    if(cred) unlockApp();
-  } catch(e){
-    console.warn('Vitals: biometric unlock failed', e);
+
+  if(
+    !settings.bioEnabled ||
+    !settings.bioCredId
+  ){
+    return false;
   }
+
+  let timer = null;
+
+  try{
+
+    /*
+     * Give the browser a short window to complete biometric
+     * authentication. If it doesn't, abort and leave the
+     * passcode keypad fully usable.
+     */
+    const controller = new AbortController();
+
+    timer = setTimeout(() => {
+      controller.abort();
+    }, autoStart ? 5000 : 60000);
+
+    const challenge =
+      crypto.getRandomValues(
+        new Uint8Array(32)
+      );
+
+    const cred =
+      await navigator.credentials.get({
+
+        publicKey: {
+
+          challenge,
+
+          allowCredentials: [{
+            id: b64urlToBytes(
+              settings.bioCredId
+            ),
+            type: 'public-key'
+          }],
+
+          userVerification: 'required',
+
+          timeout: autoStart ? 5000 : 60000,
+
+          signal: controller.signal
+        }
+      });
+
+    clearTimeout(timer);
+
+    if(cred){
+
+      unlockApp();
+      return true;
+    }
+
+  }catch(e){
+
+    if(timer){
+      clearTimeout(timer);
+    }
+
+    /*
+     * Automatic biometric failure/cancellation is NOT an error
+     * for the user. Simply leave the passcode screen available.
+     */
+    console.log(
+      'Vitals: biometric unavailable/cancelled; passcode remains available.'
+    );
+  }
+
+  return false;
 }
 
 /* =========================================================================

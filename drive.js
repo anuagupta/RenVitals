@@ -1,39 +1,44 @@
 'use strict';
 
-/* =========================================================================
-   Vitals — drive.js
-   Two-way Google Drive / Google Sheets synchronization.
-
-   Data flow:
-
-        PHONE
-          ↕
-     Google Sheet
-          ↕
-        TABLET
-
-   LocalStorage remains the local/offline copy.
-   Google Sheet is the shared cross-device copy.
-   ========================================================================= */
+/* ================================================================
+   VITALS — GOOGLE DRIVE / GOOGLE SHEETS TWO-WAY SYNC
+   ================================================================ */
 
 const DRIVE_CONFIG = {
-  CLIENT_ID:'724605143169-61ikt0nqu8i0j0rev323itqetk9phl72.apps.googleusercontent.com',
+  CLIENT_ID: '724605143169-61ikt0nqu8i0j0rev323itqetk9phl72.apps.googleusercontent.com',
   SCOPES: 'https://www.googleapis.com/auth/drive.file',
   SHEET_NAME: 'Vitals Health Log',
-  SHEET_TAB: 'Sheet1'
+  SHEET_TAB: 'Sheet1',
+  CONFIG_TAB: 'Config'
 };
 
 /*
- * Original Vitals columns:
- * A-L
- *
- * New synchronization columns:
- * M = UpdatedAt
- * N = Deleted
- *
- * Keeping the original first 12 columns means your existing Sheet data
- * remains compatible.
- */
+   Sheet1 columns:
+
+   A  ID
+   B  Type
+   C  Date
+   D  Time
+   E  Amount (mL)
+   F  Drink
+   G  Systolic
+   H  Diastolic
+   I  Pulse
+   J  Sugar (mg/dL)
+   K  Context
+   L  Note
+   M  UpdatedAt
+   N  Deleted
+   O  Value
+
+   O is used for custom metrics such as:
+   Weight
+   Serum creatinine
+   eGFR
+   Tacrolimus level
+   etc.
+*/
+
 const HEADER_ROW = [
   'ID',
   'Type',
@@ -48,6 +53,16 @@ const HEADER_ROW = [
   'Context',
   'Note',
   'UpdatedAt',
+  'Deleted',
+  'Value'
+];
+
+const CONFIG_HEADER_ROW = [
+  'ID',
+  'Name',
+  'Unit',
+  'ColorClass',
+  'UpdatedAt',
   'Deleted'
 ];
 
@@ -58,16 +73,19 @@ let tokenExpiry = 0;
 let spreadsheetId =
   localStorage.getItem('vitals:drive:spreadsheetId') || null;
 
-let flushing = false;
 let syncing = false;
+let flushing = false;
 
-/* =========================================================================
-   BASIC STATUS
-   ========================================================================= */
+
+/* ================================================================
+   BASIC HELPERS
+   ================================================================ */
 
 function isConfigured(){
-  return DRIVE_CONFIG.CLIENT_ID &&
-    !DRIVE_CONFIG.CLIENT_ID.includes('PASTE_YOUR');
+  return !!(
+    DRIVE_CONFIG.CLIENT_ID &&
+    !DRIVE_CONFIG.CLIENT_ID.includes('PASTE_YOUR')
+  );
 }
 
 function getSheetUrl(){
@@ -78,11 +96,11 @@ function getSheetUrl(){
 
 function notifyStatus(extra){
   window.dispatchEvent(
-    new CustomEvent('vitals-drive-status', {
-      detail: Object.assign({
-        connected: !!accessToken,
-        sheetUrl: getSheetUrl()
-      }, extra || {})
+    new CustomEvent('vitals-drive-status',{
+      detail:Object.assign({
+        connected:!!accessToken,
+        sheetUrl:getSheetUrl()
+      },extra || {})
     })
   );
 }
@@ -93,9 +111,10 @@ function notifyDataChanged(){
   );
 }
 
-/* =========================================================================
+
+/* ================================================================
    GOOGLE AUTHENTICATION
-   ========================================================================= */
+   ================================================================ */
 
 function ensureTokenClient(){
 
@@ -103,20 +122,20 @@ function ensureTokenClient(){
 
   if(
     !window.google ||
-    !window.google.accounts ||
-    !window.google.accounts.oauth2
+    !google.accounts ||
+    !google.accounts.oauth2
   ){
-    console.warn(
-      'Vitals: Google Identity Services script has not loaded yet.'
-    );
     return false;
   }
 
   tokenClient =
     google.accounts.oauth2.initTokenClient({
-      client_id: DRIVE_CONFIG.CLIENT_ID,
-      scope: DRIVE_CONFIG.SCOPES,
-      callback: () => {}
+
+      client_id:DRIVE_CONFIG.CLIENT_ID,
+
+      scope:DRIVE_CONFIG.SCOPES,
+
+      callback:()=>{}
     });
 
   return true;
@@ -124,19 +143,19 @@ function ensureTokenClient(){
 
 function requestToken(promptMode){
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve,reject)=>{
 
     if(!ensureTokenClient()){
-      reject(new Error(
-        'Google Identity Services not ready'
-      ));
+      reject(
+        new Error('Google Identity Services not loaded')
+      );
       return;
     }
 
-    tokenClient.callback = (response) => {
+    tokenClient.callback = response => {
 
-      if(response.error){
-        reject(response);
+      if(!response || response.error){
+        reject(response || new Error('Google authentication failed'));
         return;
       }
 
@@ -144,19 +163,27 @@ function requestToken(promptMode){
 
       tokenExpiry =
         Date.now() +
-        ((response.expires_in || 3600) * 1000);
+        ((Number(response.expires_in) || 3600) * 1000);
+
+      notifyStatus();
 
       resolve(accessToken);
     };
 
-    tokenClient.requestAccessToken({
-      prompt: promptMode
-    });
+    try{
 
+      tokenClient.requestAccessToken({
+        prompt:promptMode || ''
+      });
+
+    }catch(error){
+
+      reject(error);
+    }
   });
 }
 
-async function ensureValidToken(){
+async function ensureValidToken(interactive=false){
 
   if(
     accessToken &&
@@ -166,20 +193,15 @@ async function ensureValidToken(){
   }
 
   return requestToken(
-    accessToken ? '' : 'consent'
+    interactive ? 'consent' : ''
   );
 }
 
 async function signIn(){
 
   if(!isConfigured()){
-
-    alert(
-      'Google Drive sync is not configured yet. ' +
-      'Please put your Google OAuth Client ID in drive.js.'
-    );
-
-    return;
+    alert('Google Drive is not configured.');
+    return false;
   }
 
   try{
@@ -188,48 +210,102 @@ async function signIn(){
 
     await afterSignIn();
 
+    return true;
+
   }catch(error){
 
     console.warn(
-      'Vitals: Google Drive sign-in failed',
+      'Vitals: Google sign-in failed',
       error
     );
 
+    notifyStatus({
+      connected:false,
+      error:'Google sign-in failed'
+    });
+
+    return false;
   }
 }
 
 function disconnect(){
 
   accessToken = null;
+  tokenExpiry = 0;
 
-  notifyStatus();
+  notifyStatus({
+    connected:false
+  });
 }
 
-/* =========================================================================
+
+/* ================================================================
    GOOGLE API
-   ========================================================================= */
+   ================================================================ */
 
-async function apiFetch(url, options){
+async function apiFetch(url,options={}){
 
-  const token = await ensureValidToken();
+  let token;
+
+  try{
+
+    token =
+      await ensureValidToken(false);
+
+  }catch(error){
+
+    throw error;
+  }
 
   const headers = Object.assign(
     {},
-    options && options.headers,
+    options.headers || {},
     {
-      Authorization: 'Bearer ' + token
+      Authorization:'Bearer ' + token
     }
   );
 
-  const response = await fetch(
-    url,
-    Object.assign({}, options || {}, { headers })
-  );
+  let response =
+    await fetch(
+      url,
+      Object.assign(
+        {},
+        options,
+        {headers}
+      )
+    );
+
+  /*
+     Access token may have expired.
+     Get a fresh token once and retry.
+  */
+
+  if(response.status === 401){
+
+    accessToken = null;
+    tokenExpiry = 0;
+
+    token =
+      await ensureValidToken(false);
+
+    headers.Authorization =
+      'Bearer ' + token;
+
+    response =
+      await fetch(
+        url,
+        Object.assign(
+          {},
+          options,
+          {headers}
+        )
+      );
+  }
 
   if(!response.ok){
 
     const text =
-      await response.text().catch(() => '');
+      await response.text().catch(()=>'');
 
     throw new Error(
       `Google API ${response.status}: ${text}`
@@ -243,9 +319,10 @@ async function apiFetch(url, options){
   return response.json();
 }
 
-/* =========================================================================
-   FIND / CREATE THE SHARED SHEET
-   ========================================================================= */
+
+/* ================================================================
+   FIND / CREATE SHEET
+   ================================================================ */
 
 async function findOrCreateSheet(){
 
@@ -254,190 +331,515 @@ async function findOrCreateSheet(){
       `name='${DRIVE_CONFIG.SHEET_NAME}' and trashed=false`
     );
 
-  const search = await apiFetch(
-    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`
-  );
+  const result =
+    await apiFetch(
+      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`
+    );
 
   if(
-    search.files &&
-    search.files.length
+    result.files &&
+    result.files.length
   ){
-    return search.files[0].id;
+    return result.files[0].id;
   }
 
-  const created = await apiFetch(
-    'https://sheets.googleapis.com/v4/spreadsheets',
-    {
-      method: 'POST',
+  const created =
+    await apiFetch(
+      'https://sheets.googleapis.com/v4/spreadsheets',
+      {
+        method:'POST',
 
-      headers: {
-        'Content-Type': 'application/json'
-      },
+        headers:{
+          'Content-Type':'application/json'
+        },
 
-      body: JSON.stringify({
-        properties: {
-          title: DRIVE_CONFIG.SHEET_NAME
-        }
-      })
-    }
-  );
+        body:JSON.stringify({
+          properties:{
+            title:DRIVE_CONFIG.SHEET_NAME
+          }
+        })
+      }
+    );
 
   return created.spreadsheetId;
 }
 
-/* =========================================================================
-   ENSURE / UPGRADE HEADER
-   ========================================================================= */
+
+/* ================================================================
+   SHEET HEADERS
+   ================================================================ */
 
 async function ensureHeader(){
 
-  const range =
-    `${DRIVE_CONFIG.SHEET_TAB}!A1:N1`;
-
   await apiFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=RAW`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A1:O1?valueInputOption=RAW`,
     {
-      method: 'PUT',
+      method:'PUT',
 
-      headers: {
-        'Content-Type': 'application/json'
+      headers:{
+        'Content-Type':'application/json'
       },
 
-      body: JSON.stringify({
-        values: [HEADER_ROW]
+      body:JSON.stringify({
+        values:[HEADER_ROW]
       })
     }
   );
 }
 
-/* =========================================================================
-   SIGN-IN INITIALIZATION
-   ========================================================================= */
 
-async function afterSignIn(){
+/* ================================================================
+   CONFIG SHEET — CUSTOM METRICS
+   ================================================================ */
 
-  if(!spreadsheetId){
+async function getSpreadsheetMetadata(){
 
-    try{
-
-      spreadsheetId =
-        await findOrCreateSheet();
-
-      localStorage.setItem(
-        'vitals:drive:spreadsheetId',
-        spreadsheetId
-      );
-
-    }catch(error){
-
-      console.warn(
-        'Vitals: could not find/create Sheet',
-        error
-      );
-
-      notifyStatus({
-        error: 'Could not open Vitals Health Log'
-      });
-
-      return;
-    }
-  }
-
-  await ensureHeader();
-
-  notifyStatus();
-
-  /*
-   * IMPORTANT:
-   * First synchronize the Sheet and this device.
-   */
-  await syncNow();
-
-  await flushQueue();
+  return apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`
+  );
 }
 
-/* =========================================================================
-   LOCAL ENTRY → SHEET ROW
-   ========================================================================= */
+async function ensureConfigSheet(){
 
-function entryToRow(entry, deleted){
+  const meta =
+    await getSpreadsheetMetadata();
 
-  const d =
-    new Date(
-      entry.ts || Date.now()
+  const sheets =
+    (meta.sheets || []).map(
+      s => s.properties
     );
 
-  const pad2 =
-    n => String(n).padStart(2, '0');
+  const existing =
+    sheets.find(
+      s => s.title === DRIVE_CONFIG.CONFIG_TAB
+    );
 
-  const dateStr =
-    d.getFullYear() +
-    '-' +
-    pad2(d.getMonth() + 1) +
-    '-' +
-    pad2(d.getDate());
+  if(existing){
+    return existing.sheetId;
+  }
 
-  const timeStr =
-    pad2(d.getHours()) +
-    ':' +
-    pad2(d.getMinutes());
+  const result =
+    await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+      {
+        method:'POST',
 
-  const contextLabels = {
-    fasting: 'Fasting',
-    before: 'Before meal',
-    after: 'After meal'
-  };
+        headers:{
+          'Content-Type':'application/json'
+        },
+
+        body:JSON.stringify({
+          requests:[
+            {
+              addSheet:{
+                properties:{
+                  title:DRIVE_CONFIG.CONFIG_TAB
+                }
+              }
+            }
+          ]
+        })
+      }
+    );
+
+  return result
+    ?.replies?.[0]
+    ?.addSheet
+    ?.properties
+    ?.sheetId || null;
+}
+
+async function ensureConfigHeader(){
+
+  await ensureConfigSheet();
+
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.CONFIG_TAB}!A1:F1?valueInputOption=RAW`,
+    {
+      method:'PUT',
+
+      headers:{
+        'Content-Type':'application/json'
+      },
+
+      body:JSON.stringify({
+        values:[CONFIG_HEADER_ROW]
+      })
+    }
+  );
+}
+
+function metricToRow(metric,deleted=false){
 
   return [
-
-    entry.id || '',
-
-    entry.type || '',
-
-    dateStr,
-
-    timeStr,
-
-    (entry.type === 'liquid' ||
-     entry.type === 'urine')
-      ? entry.amount
-      : '',
-
-    entry.type === 'liquid'
-      ? (entry.drink || '')
-      : '',
-
-    entry.type === 'bp'
-      ? entry.systolic
-      : '',
-
-    entry.type === 'bp'
-      ? entry.diastolic
-      : '',
-
-    entry.type === 'bp'
-      ? (entry.pulse == null ? '' : entry.pulse)
-      : '',
-
-    entry.type === 'sugar'
-      ? entry.value
-      : '',
-
-    entry.type === 'sugar'
-      ? (contextLabels[entry.context] || '')
-      : '',
-
-    entry.note || '',
-
-    entry.updatedAt || Date.now(),
-
+    metric.id || '',
+    metric.name || '',
+    metric.unit || '',
+    metric.colorClass || 'orange',
+    Number(metric.updatedAt) || Date.now(),
     deleted ? 'TRUE' : 'FALSE'
   ];
 }
 
-/* =========================================================================
-   SHEET ROW → LOCAL ENTRY
-   ========================================================================= */
+function rowToMetric(row){
+
+  if(!row || !row[0]){
+    return null;
+  }
+
+  return {
+    id:row[0],
+    name:row[1] || '',
+    unit:row[2] || '',
+    colorClass:row[3] || 'orange',
+    updatedAt:Number(row[4]) || 0,
+    deleted:
+      String(row[5] || '').toUpperCase() === 'TRUE'
+  };
+}
+
+async function getRemoteMetrics(){
+
+  const result =
+    await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.CONFIG_TAB}!A2:F`
+    );
+
+  const map = new Map();
+
+  (result.values || []).forEach(row=>{
+
+    const metric =
+      rowToMetric(row);
+
+    if(metric){
+      map.set(metric.id,metric);
+    }
+  });
+
+  return map;
+}
+
+async function findMetricRow(id){
+
+  const result =
+    await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.CONFIG_TAB}!A:A`
+    );
+
+  const rows =
+    result.values || [];
+
+  for(let i=0;i<rows.length;i++){
+
+    if(rows[i][0] === id){
+      return i + 1;
+    }
+  }
+
+  return null;
+}
+
+async function writeMetric(metric,deleted=false){
+
+  const row =
+    metricToRow(metric,deleted);
+
+  const rowNumber =
+    await findMetricRow(metric.id);
+
+  if(!rowNumber){
+
+    await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.CONFIG_TAB}!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      {
+        method:'POST',
+
+        headers:{
+          'Content-Type':'application/json'
+        },
+
+        body:JSON.stringify({
+          values:[row]
+        })
+      }
+    );
+
+    return;
+  }
+
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.CONFIG_TAB}!A${rowNumber}:F${rowNumber}?valueInputOption=RAW`,
+    {
+      method:'PUT',
+
+      headers:{
+        'Content-Type':'application/json'
+      },
+
+      body:JSON.stringify({
+        values:[row]
+      })
+    }
+  );
+}
+
+async function syncCustomMetrics(){
+
+  await ensureConfigHeader();
+
+  const remote =
+    await getRemoteMetrics();
+
+  const local =
+    DB.getCustomMetrics() || [];
+
+  const localMap =
+    new Map(
+      local.map(
+        m => [
+          m.id,
+          Object.assign(
+            {},
+            m,
+            {
+              updatedAt:
+                Number(m.updatedAt) || 1
+            }
+          )
+        ]
+      )
+    );
+
+  const merged =
+    new Map(localMap);
+
+  const uploads = [];
+
+  /*
+     Remote → local
+  */
+
+  for(const [id,remoteMetric] of remote){
+
+    const localMetric =
+      localMap.get(id);
+
+    if(remoteMetric.deleted){
+
+      if(
+        !localMetric ||
+        remoteMetric.updatedAt >=
+        Number(localMetric.updatedAt || 0)
+      ){
+
+        merged.delete(id);
+
+      }else{
+
+        uploads.push(localMetric);
+      }
+
+      continue;
+    }
+
+    if(!localMetric){
+
+      merged.set(
+        id,
+        remoteMetric
+      );
+
+      continue;
+    }
+
+    const rt =
+      Number(remoteMetric.updatedAt) || 0;
+
+    const lt =
+      Number(localMetric.updatedAt) || 0;
+
+    if(rt > lt){
+
+      merged.set(
+        id,
+        remoteMetric
+      );
+
+    }else if(lt > rt){
+
+      uploads.push(localMetric);
+    }
+  }
+
+  /*
+     Local-only metrics → remote
+  */
+
+  for(
+    const [id,localMetric]
+    of localMap
+  ){
+
+    if(!remote.has(id)){
+      uploads.push(localMetric);
+    }
+  }
+
+  /*
+     Save merged local definitions.
+  */
+
+  const finalMetrics =
+    Array.from(
+      merged.values()
+    ).map(metric=>{
+
+      const copy =
+        Object.assign({},metric);
+
+      delete copy.deleted;
+
+      return copy;
+    });
+
+  DB.saveCustomMetrics(
+    finalMetrics
+  );
+
+  /*
+     Upload local winners.
+  */
+
+  for(const metric of uploads){
+
+    await writeMetric(
+      metric,
+      false
+    );
+  }
+}
+
+
+/* ================================================================
+   ENTRY → SHEET ROW
+   ================================================================ */
+
+function entryToRow(entry,deleted=false){
+
+  const date =
+    new Date(
+      Number(entry.ts) || Date.now()
+    );
+
+  const pad =
+    n => String(n).padStart(2,'0');
+
+  const dateString =
+    `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`;
+
+  const timeString =
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+  const contextLabels = {
+    fasting:'Fasting',
+    before:'Before meal',
+    after:'After meal'
+  };
+
+  let amount = '';
+  let drink = '';
+  let systolic = '';
+  let diastolic = '';
+  let pulse = '';
+  let sugar = '';
+  let context = '';
+  let value = '';
+
+  if(
+    entry.type === 'liquid' ||
+    entry.type === 'urine'
+  ){
+    amount =
+      entry.amount == null
+        ? ''
+        : entry.amount;
+  }
+
+  if(entry.type === 'liquid'){
+    drink =
+      entry.drink || '';
+  }
+
+  if(entry.type === 'bp'){
+
+    systolic =
+      entry.systolic == null
+        ? ''
+        : entry.systolic;
+
+    diastolic =
+      entry.diastolic == null
+        ? ''
+        : entry.diastolic;
+
+    pulse =
+      entry.pulse == null
+        ? ''
+        : entry.pulse;
+  }
+
+  if(entry.type === 'sugar'){
+
+    sugar =
+      entry.value == null
+        ? ''
+        : entry.value;
+
+    context =
+      contextLabels[entry.context] || '';
+  }
+
+  /*
+     Custom metrics.
+  */
+
+  if(
+    entry.type !== 'liquid' &&
+    entry.type !== 'urine' &&
+    entry.type !== 'bp' &&
+    entry.type !== 'sugar'
+  ){
+
+    value =
+      entry.value == null
+        ? ''
+        : entry.value;
+  }
+
+  return [
+    entry.id || '',
+    entry.type || '',
+    dateString,
+    timeString,
+    amount,
+    drink,
+    systolic,
+    diastolic,
+    pulse,
+    sugar,
+    context,
+    entry.note || '',
+    Number(entry.updatedAt) || Date.now(),
+    deleted ? 'TRUE' : 'FALSE',
+    value
+  ];
+}
+
+
+/* ================================================================
+   SHEET ROW → ENTRY
+   ================================================================ */
 
 function rowToEntry(row){
 
@@ -445,28 +847,28 @@ function rowToEntry(row){
     return null;
   }
 
-  const id = row[0];
+  const id =
+    row[0];
 
-  const type = row[1] || '';
+  const type =
+    row[1] || '';
 
-  const date = row[2] || '';
+  const date =
+    row[2] || '';
 
-  const time = row[3] || '00:00';
+  const time =
+    row[3] || '00:00';
 
-  const parsedTs =
+  const parsed =
     Date.parse(
       `${date}T${time}:00`
     );
 
   const ts =
-    isNaN(parsedTs)
+    Number.isNaN(parsed)
       ? Date.now()
-      : parsedTs;
+      : parsed;
 
-  /*
-   * Old rows won't have UpdatedAt.
-   * In that case use the entry timestamp.
-   */
   const updatedAt =
     Number(row[12]) || ts;
 
@@ -479,7 +881,7 @@ function rowToEntry(row){
     return {
       id,
       updatedAt,
-      deleted: true
+      deleted:true
     };
   }
 
@@ -500,7 +902,6 @@ function rowToEntry(row){
   }
 
   if(type === 'liquid'){
-
     entry.drink =
       row[5] || '';
   }
@@ -525,13 +926,13 @@ function rowToEntry(row){
     entry.value =
       Number(row[9]) || 0;
 
-    const context =
+    const c =
       String(row[10] || '')
         .toLowerCase();
 
-    if(context === 'before meal'){
+    if(c === 'before meal'){
       entry.context = 'before';
-    }else if(context === 'after meal'){
+    }else if(c === 'after meal'){
       entry.context = 'after';
     }else{
       entry.context = 'fasting';
@@ -539,8 +940,9 @@ function rowToEntry(row){
   }
 
   /*
-   * Custom metrics use .value.
-   */
+     Custom metric value lives in column O.
+  */
+
   if(
     type !== 'liquid' &&
     type !== 'urine' &&
@@ -548,157 +950,30 @@ function rowToEntry(row){
     type !== 'sugar'
   ){
 
-    const rawValue = row[11];
-
-    /*
-     * For custom metrics the old sheet doesn't have a dedicated value
-     * column. We therefore preserve the value in the Note field only
-     * for old records if necessary. New custom records are handled by
-     * the local entry object and the sync timestamp.
-     */
-    if(
-      rawValue !== undefined &&
-      rawValue !== null &&
-      rawValue !== ''
-    ){
-      const n = Number(rawValue);
-      if(!isNaN(n)){
-        entry.value = n;
-      }
-    }
-
-    if(entry.value === undefined){
-      entry.value = 0;
-    }
+    entry.value =
+      Number(row[14]) || 0;
   }
 
   entry.note =
     row[11] || '';
 
-  /*
-   * The existing app expects custom metric values in .value.
-   * If the Sheet row contains a numeric note and this is a custom metric,
-   * use it as the value only when appropriate.
-   */
-  if(
-    type !== 'liquid' &&
-    type !== 'urine' &&
-    type !== 'bp' &&
-    type !== 'sugar'
-  ){
-
-    const n = Number(row[11]);
-
-    if(!isNaN(n) && row[11] !== ''){
-      entry.value = n;
-      entry.note = '';
-    }
-  }
-
   return entry;
 }
 
-/* =========================================================================
-   READ ALL SHEET ROWS
-   ========================================================================= */
+
+/* ================================================================
+   REMOTE DATA
+   ================================================================ */
 
 async function getAllRows(){
 
-  const response =
+  const result =
     await apiFetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A2:N`
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A2:O`
     );
 
-  return response.values || [];
+  return result.values || [];
 }
-
-/* =========================================================================
-   FIND ROW BY ENTRY ID
-   ========================================================================= */
-
-async function findRowNumberById(id){
-
-  const response =
-    await apiFetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A:A`
-    );
-
-  const rows =
-    response.values || [];
-
-  for(let i = 0; i < rows.length; i++){
-
-    if(rows[i][0] === id){
-      return i + 1;
-    }
-  }
-
-  return null;
-}
-
-/* =========================================================================
-   WRITE / UPDATE ROW
-   ========================================================================= */
-
-async function appendRow(entry, deleted){
-
-  await apiFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
-    {
-      method: 'POST',
-
-      headers: {
-        'Content-Type': 'application/json'
-      },
-
-      body: JSON.stringify({
-        values: [
-          entryToRow(entry, deleted)
-        ]
-      })
-    }
-  );
-}
-
-async function upsertRow(entry, deleted){
-
-  const rowNumber =
-    await findRowNumberById(entry.id);
-
-  if(!rowNumber){
-
-    await appendRow(
-      entry,
-      deleted
-    );
-
-    return;
-  }
-
-  await apiFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A${rowNumber}:N${rowNumber}?valueInputOption=RAW`,
-    {
-      method: 'PUT',
-
-      headers: {
-        'Content-Type': 'application/json'
-      },
-
-      body: JSON.stringify({
-        values: [
-          entryToRow(
-            entry,
-            deleted
-          )
-        ]
-      })
-    }
-  );
-}
-
-/* =========================================================================
-   DOWNLOAD REMOTE DATA
-   ========================================================================= */
 
 async function getRemoteMap(){
 
@@ -708,7 +983,7 @@ async function getRemoteMap(){
   const map =
     new Map();
 
-  rows.forEach(row => {
+  rows.forEach(row=>{
 
     const entry =
       rowToEntry(row);
@@ -725,9 +1000,85 @@ async function getRemoteMap(){
   return map;
 }
 
-/* =========================================================================
-   TWO-WAY SYNCHRONIZATION
-   ========================================================================= */
+
+/* ================================================================
+   FIND / WRITE ENTRY ROW
+   ================================================================ */
+
+async function findEntryRow(id){
+
+  const result =
+    await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A:A`
+    );
+
+  const rows =
+    result.values || [];
+
+  for(let i=0;i<rows.length;i++){
+
+    if(rows[i][0] === id){
+      return i + 1;
+    }
+  }
+
+  return null;
+}
+
+async function writeEntryRow(
+  entry,
+  deleted=false
+){
+
+  const row =
+    entryToRow(
+      entry,
+      deleted
+    );
+
+  const rowNumber =
+    await findEntryRow(entry.id);
+
+  if(!rowNumber){
+
+    await apiFetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      {
+        method:'POST',
+
+        headers:{
+          'Content-Type':'application/json'
+        },
+
+        body:JSON.stringify({
+          values:[row]
+        })
+      }
+    );
+
+    return;
+  }
+
+  await apiFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${DRIVE_CONFIG.SHEET_TAB}!A${rowNumber}:O${rowNumber}?valueInputOption=RAW`,
+    {
+      method:'PUT',
+
+      headers:{
+        'Content-Type':'application/json'
+      },
+
+      body:JSON.stringify({
+        values:[row]
+      })
+    }
+  );
+}
+
+
+/* ================================================================
+   TWO-WAY SYNC
+   ================================================================ */
 
 async function syncNow(){
 
@@ -744,16 +1095,27 @@ async function syncNow(){
 
   try{
 
+    /*
+       FIRST: synchronize custom metric definitions.
+       This is what allows Weight to appear on the tablet.
+    */
+
+    await syncCustomMetrics();
+
+    /*
+       THEN: synchronize readings.
+    */
+
     const remote =
       await getRemoteMap();
 
     const local =
-      DB.getEntries();
+      DB.getEntries() || [];
 
     const localMap =
       new Map(
         local.map(
-          entry => [entry.id, entry]
+          e => [e.id,e]
         )
       );
 
@@ -763,16 +1125,17 @@ async function syncNow(){
     const uploads = [];
 
     /*
-     * Compare every record that exists remotely.
-     */
-    for(const [id, remoteEntry] of remote){
+       Remote records.
+    */
+
+    for(
+      const [id,remoteEntry]
+      of remote
+    ){
 
       const localEntry =
         localMap.get(id);
 
-      /*
-       * Remote deletion.
-       */
       if(remoteEntry.deleted){
 
         if(
@@ -785,13 +1148,9 @@ async function syncNow(){
 
         }else{
 
-          /*
-           * Local copy is newer.
-           * Re-upload it.
-           */
           uploads.push({
-            entry: localEntry,
-            deleted: false
+            entry:localEntry,
+            deleted:false
           });
         }
 
@@ -799,8 +1158,9 @@ async function syncNow(){
       }
 
       /*
-       * Record exists only remotely.
-       */
+         Exists only on remote.
+      */
+
       if(!localEntry){
 
         merged.set(
@@ -811,87 +1171,88 @@ async function syncNow(){
         continue;
       }
 
-      const localTime =
-        Number(localEntry.updatedAt || 0);
-
-      const remoteTime =
+      const rt =
         Number(remoteEntry.updatedAt || 0);
 
-      /*
-       * Remote is newer → download it.
-       */
-      if(remoteTime > localTime){
+      const lt =
+        Number(localEntry.updatedAt || 0);
+
+      if(rt > lt){
 
         merged.set(
           id,
           remoteEntry
         );
 
-      /*
-       * Local is newer → upload it.
-       */
-      }else if(localTime > remoteTime){
+      }else if(lt > rt){
 
         uploads.push({
-          entry: localEntry,
-          deleted: false
+          entry:localEntry,
+          deleted:false
         });
       }
     }
 
     /*
-     * Anything that exists only locally must be uploaded.
-     */
-    for(const [id, localEntry] of localMap){
+       Local-only records.
+    */
+
+    for(
+      const [id,localEntry]
+      of localMap
+    ){
 
       if(!remote.has(id)){
 
         uploads.push({
-          entry: localEntry,
-          deleted: false
+          entry:localEntry,
+          deleted:false
         });
       }
     }
 
     /*
-     * Save the merged dataset locally.
-     */
+       Save merged local database.
+    */
+
     const mergedList =
-      Array.from(merged.values())
-        .filter(
-          entry =>
-            entry &&
-            entry.id &&
-            !entry.deleted
-        )
-        .sort(
-          (a,b) =>
-            (a.ts || 0) -
-            (b.ts || 0)
-        );
+      Array.from(
+        merged.values()
+      )
+      .filter(
+        e => e && e.id && !e.deleted
+      )
+      .sort(
+        (a,b)=>
+          (a.ts || 0) -
+          (b.ts || 0)
+      );
 
     DB.saveEntries(
       mergedList
     );
 
     /*
-     * Tell app.js that the visible data has changed.
-     */
+       Refresh the Vitals UI.
+    */
+
     notifyDataChanged();
 
     /*
-     * Upload local winners.
-     */
+       Upload local winners.
+    */
+
     for(const item of uploads){
 
-      await upsertRow(
+      await writeEntryRow(
         item.entry,
         item.deleted
       );
     }
 
     notifyStatus({
-      lastSyncAt: Date.now()
+      connected:true,
+      lastSyncAt:Date.now()
     });
 
     return true;
@@ -899,13 +1260,13 @@ async function syncNow(){
   }catch(error){
 
     console.warn(
-      'Vitals: Google Drive synchronization failed',
+      'Vitals Drive sync failed:',
       error
     );
 
     notifyStatus({
-      error:
-        'Sync failed — will retry automatically'
+      connected:!!accessToken,
+      error:'Sync failed — will retry'
     });
 
     return false;
@@ -916,9 +1277,10 @@ async function syncNow(){
   }
 }
 
-/* =========================================================================
+
+/* ================================================================
    OFFLINE QUEUE
-   ========================================================================= */
+   ================================================================ */
 
 function getQueue(){
 
@@ -947,7 +1309,7 @@ function saveQueue(queue){
 function queueUpsert(entry){
 
   const queue =
-    getQueue().filter(item => {
+    getQueue().filter(item=>{
 
       if(
         item.op === 'upsert' &&
@@ -968,7 +1330,7 @@ function queueUpsert(entry){
     });
 
   queue.push({
-    op: 'upsert',
+    op:'upsert',
     entry
   });
 
@@ -983,7 +1345,7 @@ function queueDelete(
 ){
 
   const queue =
-    getQueue().filter(item => {
+    getQueue().filter(item=>{
 
       if(
         item.op === 'upsert' &&
@@ -1004,20 +1366,16 @@ function queueDelete(
     });
 
   queue.push({
-    op: 'delete',
+    op:'delete',
     id,
     updatedAt:
-      updatedAt || Date.now()
+      Number(updatedAt) || Date.now()
   });
 
   saveQueue(queue);
 
   flushQueue();
 }
-
-/* =========================================================================
-   FLUSH OFFLINE CHANGES
-   ========================================================================= */
 
 async function flushQueue(){
 
@@ -1034,7 +1392,7 @@ async function flushQueue(){
 
   try{
 
-    let queue =
+    const queue =
       getQueue();
 
     while(queue.length){
@@ -1046,27 +1404,21 @@ async function flushQueue(){
 
         if(item.op === 'upsert'){
 
-          await upsertRow(
+          await writeEntryRow(
             item.entry,
             false
           );
 
         }else if(item.op === 'delete'){
 
-          /*
-           * We don't erase the Sheet row.
-           * We write a tombstone so the deletion propagates
-           * to the other device.
-           */
           const tombstone = {
-            id: item.id,
-            type: 'deleted',
-            ts: item.updatedAt || Date.now(),
-            updatedAt:
-              item.updatedAt || Date.now()
+            id:item.id,
+            type:'deleted',
+            ts:Number(item.updatedAt) || Date.now(),
+            updatedAt:Number(item.updatedAt) || Date.now()
           };
 
-          await upsertRow(
+          await writeEntryRow(
             tombstone,
             true
           );
@@ -1075,7 +1427,7 @@ async function flushQueue(){
       }catch(error){
 
         console.warn(
-          'Vitals: queue item failed; will retry',
+          'Vitals queue item failed:',
           error
         );
 
@@ -1093,42 +1445,130 @@ async function flushQueue(){
   }
 }
 
-/* =========================================================================
-   AUTOMATIC ONLINE SYNC
-   ========================================================================= */
+
+/* ================================================================
+   AFTER SIGN-IN
+   ================================================================ */
+
+async function afterSignIn(){
+
+  if(!spreadsheetId){
+
+    spreadsheetId =
+      await findOrCreateSheet();
+
+    localStorage.setItem(
+      'vitals:drive:spreadsheetId',
+      spreadsheetId
+    );
+  }
+
+  await ensureHeader();
+
+  await ensureConfigHeader();
+
+  notifyStatus({
+    connected:true
+  });
+
+  /*
+     Pull first, then push.
+  */
+
+  await syncNow();
+
+  await flushQueue();
+}
+
+
+/* ================================================================
+   AUTOMATIC RECONNECTION
+   ================================================================ */
+
+async function attemptRestore(){
+
+  if(
+    accessToken ||
+    !navigator.onLine ||
+    !isConfigured()
+  ){
+    return;
+  }
+
+  try{
+
+    /*
+       Empty prompt attempts silent token reuse.
+       If Google refuses it, we simply remain disconnected.
+       The user can manually reconnect.
+    */
+
+    await requestToken('');
+
+    await afterSignIn();
+
+  }catch(error){
+
+    console.log(
+      'Vitals: silent Drive reconnect unavailable.'
+    );
+
+    notifyStatus({
+      connected:false,
+      needsReconnect:true
+    });
+  }
+}
+
+
+/* ================================================================
+   ONLINE EVENT
+   ================================================================ */
 
 window.addEventListener(
   'online',
-  () => {
+  async ()=>{
 
-    if(!window.VitalsDrive){
-      return;
+    await attemptRestore();
+
+    if(accessToken){
+
+      await syncNow();
+
+      await flushQueue();
     }
-
-    window.VitalsDrive
-      .syncNow()
-      .then(
-        () =>
-          window.VitalsDrive.flushQueue()
-      );
   }
 );
 
-/* =========================================================================
+
+/* ================================================================
    PUBLIC API
-   ========================================================================= */
+   ================================================================ */
 
 window.VitalsDrive = {
 
   init(){
 
     /*
-     * Retry synchronization every minute.
-     */
+       Try to restore an existing Google authorization.
+    */
+
+    setTimeout(
+      attemptRestore,
+      700
+    );
+
+    /*
+       Periodic synchronization.
+    */
+
     setInterval(
-      async () => {
+      async ()=>{
 
         if(!accessToken){
+
+          await attemptRestore();
+
           return;
         }
 
@@ -1141,30 +1581,32 @@ window.VitalsDrive = {
     );
 
     /*
-     * Local entry changed.
-     */
+       Local data changed.
+    */
+
     window.addEventListener(
       'vitals-local-data-changed',
-      () => {
+      async ()=>{
 
         if(accessToken){
 
-          flushQueue();
+          await flushQueue();
+
+          await syncNow();
         }
       }
     );
 
-    if(accessToken){
-      notifyStatus();
-    }
+    notifyStatus();
   },
 
   signIn,
 
   disconnect,
 
-  isConnected:
-    () => !!accessToken,
+  isConnected(){
+    return !!accessToken;
+  },
 
   isConfigured,
 

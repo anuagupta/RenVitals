@@ -79,6 +79,21 @@ function combineDateTime(dateStr, timeStr, fallbackTs){
   return d.getTime();
 }
 function avg(arr){ return arr.reduce((s,v)=>s+v,0) / (arr.length||1); }
+/*
+ * Daily-average aggregation used to collapse to Math.round(), which turns
+ * whole numbers only — so decimal readings like 1.55 / 1.6 / 1.7 (a common
+ * precision for things like serum creatinine) all landed on the same
+ * rounded dot in the Trends chart and looked like no change happened at
+ * all. This keeps up to `decimals` places (2 by default) instead of
+ * flattening to an integer, while still snapping away floating-point
+ * noise from averaging (e.g. 1.5666666666666667 -> 1.57) so the display
+ * stays clean rather than showing raw float artifacts.
+ */
+function roundSmart(value, decimals){
+  if(value === null || value === undefined || Number.isNaN(value)) return value;
+  const factor = Math.pow(10, decimals == null ? 2 : decimals);
+  return Math.round((value + Number.EPSILON) * factor) / factor;
+}
 function lastNDates(n){
   const out = [];
   for(let i=n-1;i>=0;i--){
@@ -1055,12 +1070,12 @@ function dailySeriesFor(type, dates, list){
   if(type==='bp'){
     return dates.map(d=>{
       const day = list.filter(e=>sameDay(e.ts,d));
-      return day.length ? Math.round(avg(day.map(e=>e.systolic))) : null;
+      return day.length ? roundSmart(avg(day.map(e=>e.systolic)), 2) : null;
     });
   }
   return dates.map(d=>{
     const day = list.filter(e=>sameDay(e.ts,d));
-    return day.length ? Math.round(avg(day.map(e=>e.value))) : null;
+    return day.length ? roundSmart(avg(day.map(e=>e.value)), 2) : null;
   });
 }
 function trendCardHtml(type, dates, allEntries){
@@ -1077,16 +1092,16 @@ function trendCardHtml(type, dates, allEntries){
   let rangeText, currentHtml;
   if(isVolume){
     const today = list.filter(e=>isToday(e.ts)).reduce((s,e)=>s+e.amount,0);
-    rangeText = present.length ? `${currentTrendRange}d avg ${Math.round(avg(present)).toLocaleString()} mL` : 'No data yet';
+    rangeText = present.length ? `${currentTrendRange}d avg ${roundSmart(avg(present), 2).toLocaleString(undefined, {maximumFractionDigits:2})} mL` : 'No data yet';
     currentHtml = `${today.toLocaleString()}<span style="${dim}"> mL today</span>`;
   } else if(type==='bp'){
-    rangeText = present.length ? `${currentTrendRange}d avg sys ${Math.round(avg(present))}` : 'No data yet';
+    rangeText = present.length ? `${currentTrendRange}d avg sys ${roundSmart(avg(present), 2)}` : 'No data yet';
     currentHtml = latest ? `${latest.systolic}<span style="${dim}"> / ${latest.diastolic} mmHg</span>` : '—';
   } else if(type==='sugar'){
-    rangeText = present.length ? `${currentTrendRange}d avg ${Math.round(avg(present))} mg/dL` : 'No data yet';
+    rangeText = present.length ? `${currentTrendRange}d avg ${roundSmart(avg(present), 2)} mg/dL` : 'No data yet';
     currentHtml = latest ? `${latest.value}<span style="${dim}"> mg/dL · ${sugarContextLabel(latest.context)}</span>` : '—';
   } else {
-    rangeText = present.length ? `${currentTrendRange}d avg ${Math.round(avg(present))} ${escapeHtml(meta.unit)}` : 'No data yet';
+    rangeText = present.length ? `${currentTrendRange}d avg ${roundSmart(avg(present), 2)} ${escapeHtml(meta.unit)}` : 'No data yet';
     currentHtml = latest ? `${latest.value}<span style="${dim}"> ${escapeHtml(meta.unit)}</span>` : '—';
   }
 

@@ -311,6 +311,17 @@ let chartZoomStartScale = 1;
 let chartZoomPanStart = null;
 const CHART_ZOOM_MIN = 1;
 const CHART_ZOOM_MAX = 6;
+// How many days back the expanded chart is currently plotting. Starts at
+// whatever the Trends toggle (7d/30d) was showing when the chart was
+// opened, and grows when the user keeps trying to zoom out past the
+// natural "everything fits" scale of 1 — see tryExpandChartRange() below.
+let chartExpandRangeDays = 7;
+// Only one range expansion is allowed per continuous zoom-out gesture (a
+// pinch held below scale 1, or a burst of wheel ticks) — otherwise a single
+// gesture would fire dozens of expansions in a row. Re-armed when the
+// gesture ends (all pointers lift, or wheel input goes quiet).
+let chartRangeExpandArmed = true;
+let chartWheelExpandTimer = null;
 
 /* =========================================================================
    RENDERING — Home
@@ -1125,10 +1136,10 @@ function renderTrends(){
 /* =========================================================================
    TRENDS — tap-to-expand chart (full-screen, pinch/scroll zoom + pan)
    ========================================================================= */
-function buildExpandedChartSvg(type){
+function buildExpandedChartSvg(type, rangeDays){
   const meta = getMetricMeta(type);
   if(!meta) return '';
-  const dates = lastNDates(currentTrendRange);
+  const dates = lastNDates(rangeDays || currentTrendRange);
   const list = DB.getEntries().filter(e=>e.type===type);
   const isVolume = (type==='liquid' || type==='urine');
   const daily = dailySeriesFor(type, dates, list);
@@ -1189,18 +1200,61 @@ function openChartExpand(type){
   const meta = getMetricMeta(type);
   if(!meta) return;
   chartExpandType = type;
+  chartExpandRangeDays = currentTrendRange;
+  chartRangeExpandArmed = true;
   const agg = computeHomeAggregate(type);
   const tmp = document.createElement('div');
   tmp.innerHTML = agg.valueHtml;
   $('#chart-expand-cat').textContent = meta.label;
   $('#chart-expand-val').textContent = tmp.textContent;
-  $('#chart-expand-svg').innerHTML = buildExpandedChartSvg(type);
+  renderExpandedChart();
   resetChartZoom();
   $('#chart-expand').classList.add('show');
 }
 function closeChartExpand(){
   $('#chart-expand').classList.remove('show');
   chartExpandType = null;
+  clearTimeout(chartWheelExpandTimer);
+}
+
+function renderExpandedChart(){
+  if(!chartExpandType) return;
+  $('#chart-expand-svg').innerHTML = buildExpandedChartSvg(chartExpandType, chartExpandRangeDays);
+}
+
+/*
+ * How far back this metric actually has data, in days — the ceiling on how
+ * far "keep zooming out" is allowed to grow chartExpandRangeDays. Without
+ * this, zooming out past the oldest real entry would just plot a lot of
+ * empty days for no benefit.
+ */
+function maxChartRangeDaysFor(type){
+  const list = DB.getEntries().filter(e=>e.type===type);
+  if(!list.length) return chartExpandRangeDays;
+  const oldest = Math.min(...list.map(e=>e.ts));
+  const daysSinceOldest = Math.round((startOfDay(Date.now()) - startOfDay(oldest)) / 86400000) + 1;
+  return Math.max(daysSinceOldest, currentTrendRange);
+}
+
+/*
+ * The actual "zoom out reveals older data" behavior: called whenever a
+ * pinch or scroll gesture tries to go past the natural scale-1 fit. Doubles
+ * how many days back the chart plots (capped at the oldest entry that
+ * exists for this metric), rebuilds it, and lands back at a clean scale-1
+ * fit of that wider range — so, e.g., an entry from the 23rd that had
+ * scrolled out of a 7-day view becomes visible again instead of staying
+ * stuck just out of reach.
+ */
+function tryExpandChartRange(){
+  if(!chartRangeExpandArmed || !chartExpandType) return;
+  const cap = maxChartRangeDaysFor(chartExpandType);
+  if(chartExpandRangeDays >= cap) return;
+  chartExpandRangeDays = Math.min(cap, chartExpandRangeDays * 2);
+  chartRangeExpandArmed = false;
+  renderExpandedChart();
+  chartZoomState = { scale:1, x:0, y:0 };
+  chartZoomStartDist = 0;
+  applyChartZoomTransform();
 }
 
 function applyChartZoomTransform(){
@@ -1208,15 +1262,31 @@ function applyChartZoomTransform(){
   if(!svg) return;
   svg.style.transform = `translate(${chartZoomState.x}px, ${chartZoomState.y}px) scale(${chartZoomState.scale})`;
 }
+/*
+ * Returns true if the caller was trying to zoom out further than scale 1
+ * (the "everything fits" point) allows — the signal tryExpandChartRange()
+ * uses to grow the visible date range instead of just refusing the zoom.
+ *
+ * Panning is clamped to exactly the zoomed content's own overhang (no
+ * added slack) so at scale 1 — where the content already fills the
+ * viewport exactly — pan is forced to (0,0). Previously a constant 15%-of-
+ * viewport pan allowance applied even at scale 1, which let part of the
+ * chart (potentially including the newest or oldest plotted day) get
+ * dragged out of the visible area with nothing to bring it back until the
+ * sheet was closed and reopened.
+ */
 function clampChartZoom(){
+  const wantsToZoomOutFurther = chartZoomState.scale < CHART_ZOOM_MIN;
   chartZoomState.scale = Math.min(CHART_ZOOM_MAX, Math.max(CHART_ZOOM_MIN, chartZoomState.scale));
   const viewport = $('#chart-zoom-viewport');
-  if(!viewport) return;
-  const rect = viewport.getBoundingClientRect();
-  const maxX = (rect.width * (chartZoomState.scale-1)) / 2 + rect.width*0.15;
-  const maxY = (rect.height * (chartZoomState.scale-1)) / 2 + rect.height*0.15;
-  chartZoomState.x = Math.min(maxX, Math.max(-maxX, chartZoomState.x));
-  chartZoomState.y = Math.min(maxY, Math.max(-maxY, chartZoomState.y));
+  if(viewport){
+    const rect = viewport.getBoundingClientRect();
+    const maxX = (rect.width * (chartZoomState.scale-1)) / 2;
+    const maxY = (rect.height * (chartZoomState.scale-1)) / 2;
+    chartZoomState.x = Math.min(maxX, Math.max(-maxX, chartZoomState.x));
+    chartZoomState.y = Math.min(maxY, Math.max(-maxY, chartZoomState.y));
+  }
+  return wantsToZoomOutFurther;
 }
 function resetChartZoom(){
   chartZoomState = { scale:1, x:0, y:0 };
@@ -1253,8 +1323,9 @@ function wireChartZoomEvents(){
       const dist = chartZoomDistance(pts[0], pts[1]);
       if(chartZoomStartDist > 0){
         chartZoomState.scale = chartZoomStartScale * (dist / chartZoomStartDist);
-        clampChartZoom();
+        const wantsMore = clampChartZoom();
         applyChartZoomTransform();
+        if(wantsMore) tryExpandChartRange();
       }
     } else if(chartZoomPointers.size === 1 && chartZoomPanStart){
       const p = chartZoomPointers.get(e.pointerId);
@@ -1273,6 +1344,9 @@ function wireChartZoomEvents(){
       chartZoomPanStart = { x:remaining.x, y:remaining.y, startTX:chartZoomState.x, startTY:chartZoomState.y };
     } else if(chartZoomPointers.size === 0){
       chartZoomPanStart = null;
+      // Gesture fully released — the next pinch-out is allowed to expand
+      // the range again (7 -> 14 -> 30 -> ... one step per gesture).
+      chartRangeExpandArmed = true;
     }
   }
   viewport.addEventListener('pointerup', endPointer);
@@ -1283,8 +1357,16 @@ function wireChartZoomEvents(){
     e.preventDefault();
     const delta = -e.deltaY * 0.0015;
     chartZoomState.scale = chartZoomState.scale * (1 + delta);
-    clampChartZoom();
+    const wantsMore = clampChartZoom();
     applyChartZoomTransform();
+    if(wantsMore) tryExpandChartRange();
+    // A scroll wheel/trackpad sends a burst of small events for one
+    // logical gesture — re-arm shortly after the input goes quiet instead
+    // of on every single tick, or a mouse-wheel zoom-out would trigger a
+    // range expansion many times over for what is really one "keep
+    // pulling out" motion.
+    clearTimeout(chartWheelExpandTimer);
+    chartWheelExpandTimer = setTimeout(()=>{ chartRangeExpandArmed = true; }, 500);
   }, { passive:false });
 
   viewport.addEventListener('dblclick', resetChartZoom);

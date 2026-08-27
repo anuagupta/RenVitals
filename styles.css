@@ -17,6 +17,7 @@
   --pink:#C97B9B;   --pink-soft:#F7E5EE;
   --white:#FFFFFF;  --white-soft:#F1F0EC;
   --white-halo: rgba(28,28,30,0.45);
+  --white-ink: #2A2A2E;
   --danger:#C0392B;
 
   --glass-bg: color-mix(in srgb, var(--bg) 62%, transparent);
@@ -214,8 +215,8 @@ main{flex:1;padding:18px 20px 100px;}
   background:linear-gradient(135deg, color-mix(in srgb, var(--white) 55%, var(--surface-2)), color-mix(in srgb, var(--white) 20%, var(--surface-2)));
   border-bottom:1px solid var(--hairline);
 }
-.card.white .card-icon{color:var(--text);}
-.card.white .card-plus{background:var(--white); color:var(--text); box-shadow:inset 0 0 0 1.5px var(--hairline);}
+.card.white .card-icon{color:var(--white-ink);}
+.card.white .card-plus{background:var(--white); color:var(--white-ink); box-shadow:inset 0 0 0 1.5px var(--hairline);}
 
 /* White is the one accent that can vanish against the app's near-white
    surfaces, so anything painted with it gets a thin outline instead of

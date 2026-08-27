@@ -111,13 +111,29 @@ const ICONS = {
   urine:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3h6l1 4H8l1-4Z"/><path d="M8 7h8l1.2 11.2A2 2 0 0 1 15.2 20H8.8a2 2 0 0 1-2-2.2L8 7Z"/></svg>',
   bp:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h3l2 6 4-14 2 8h5"/></svg>',
   sugar:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>',
-  custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3h6M10 3v6.5L5.5 17a2 2 0 0 0 1.7 3h9.6a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M8.5 14h7"/></svg>'
+  custom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3h6M10 3v6.5L5.5 17a2 2 0 0 0 1.7 3h9.6a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M8.5 14h7"/></svg>',
+  weight:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="15" rx="3"/><path d="M8.5 10.5a3.5 3.5 0 0 1 7 0"/><path d="M12 10.5v2.3l1.8 1.8"/></svg>',
+  creatinine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M9.5 3v9.5a4.5 4.5 0 1 0 5 0V3"/><path d="M9.3 14.5h5.4"/></svg>',
+  egfr:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l3.5-6"/><path d="M4 17h2M18 17h2"/></svg>',
+  tacrolimus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9.5" width="16" height="7" rx="3.5" transform="rotate(-25 12 13)"/><path d="M9.3 10.3l2.2 5.6" transform="rotate(-25 12 13)"/></svg>'
 };
+// Approved (round 1) tile icons for the kidney-panel parameters, matched by
+// name so any custom metric called e.g. "Serum Creatinine" or "creatinine"
+// picks up its dedicated glyph instead of the generic flask — anything that
+// doesn't match falls back to ICONS.custom.
+function iconForCustomMetric(name){
+  const n = (name || '').toLowerCase();
+  if(n.includes('weight')) return ICONS.weight;
+  if(n.includes('creatinine')) return ICONS.creatinine;
+  if(n.includes('egfr') || n.includes('gfr')) return ICONS.egfr;
+  if(n.includes('tacrolimus') || n.includes('tac level')) return ICONS.tacrolimus;
+  return ICONS.custom;
+}
 const TYPE_META = {
   liquid: {label:'Fluid Intake', sheetNoun:'fluid intake', colorClass:'blue',   colorVar:'--blue',   icon:ICONS.liquid, unit:'mL'},
   urine:  {label:'Urine output', sheetNoun:'urine output',  colorClass:'yellow',colorVar:'--yellow', icon:ICONS.urine,  unit:'mL'},
   bp:     {label:'Blood pressure', sheetNoun:'blood pressure', colorClass:'red', colorVar:'--red',  icon:ICONS.bp,     unit:'mmHg'},
-  sugar:  {label:'Sugar', sheetNoun:'sugar reading', colorClass:'green', colorVar:'--green', icon:ICONS.sugar, unit:'mg/dL'}
+  sugar:  {label:'Sugar', sheetNoun:'sugar reading', colorClass:'white', colorVar:'--white', icon:ICONS.sugar, unit:'mg/dL'}
 };
 const PRESET_AMOUNTS = [100,150,200,250,300,350];
 const DRINK_TYPES = ['Water','Tea','Coffee','Juice','Other'];
@@ -144,6 +160,7 @@ const METRIC_COLORS = [
 // A couple of one-tap starting points for the kidney-transplant panel the
 // user asked about — still fully editable before saving.
 const METRIC_SUGGESTIONS = [
+  {name:'Weight', unit:'kg', colorClass:'pink'},
   {name:'Serum creatinine', unit:'mg/dL', colorClass:'orange'},
   {name:'eGFR', unit:'mL/min/1.73m²', colorClass:'purple'},
   {name:'Tacrolimus level', unit:'ng/mL', colorClass:'teal'}
@@ -156,8 +173,26 @@ const ALL_COLORS = [
   ['blue','Blue','--blue'], ['yellow','Yellow','--yellow'],
   ['red','Red','--red'],    ['green','Green','--green'],
   ['orange','Orange','--orange'], ['purple','Purple','--purple'],
-  ['pink','Pink','--pink'], ['teal','Teal','--teal']
+  ['pink','Pink','--pink'], ['teal','Teal','--teal'],
+  ['white','White','--white']
 ];
+
+// White reads as a near-invisible line/dot on the app's white (light-mode)
+// surface, so anything drawn with --white gets a thin halo/outline instead
+// of being left to disappear. haloClass() goes on chart strokes & dots
+// (SVG, via a soft drop-shadow outline); haloFillClass() goes on solid
+// swatches/dots (plain elements, via an inset ring) — see .tone-white-line
+// / .tone-white-fill in styles.css. Both are no-ops for every other color.
+function haloClass(colorVar){ return colorVar === '--white' ? ' class="tone-white-line"' : ''; }
+function haloFillClass(colorVar){ return colorVar === '--white' ? ' tone-white-fill' : ''; }
+// Belt-and-suspenders for standalone dots/bars (circles, rects): on top of
+// the drop-shadow halo above, these also get a real SVG stroke ring, so a
+// single isolated white marker (e.g. one lone sugar reading, nothing to
+// draw a line between) never reads as blank on a white card.
+function haloRing(colorVar){ return colorVar === '--white' ? ' stroke="var(--white-halo)" stroke-width="1"' : ''; }
+// Text set directly in an accent color (e.g. the Trends tab label) needs the
+// same treatment — swap it for --text rather than rendering white-on-white.
+function textSafeColorVar(meta){ return meta.colorClass === 'white' ? '--text' : meta.colorVar; }
 
 function getMetricMeta(type){
   const overrides = DB.getColorOverrides();
@@ -172,7 +207,7 @@ function getMetricMeta(type){
   const colorEntry = ALL_COLORS.find(c=>c[0]===colorKey) || ALL_COLORS[0];
   return {
     label: m.name, sheetNoun: m.name.toLowerCase(), colorClass: colorEntry[0],
-    colorVar: colorEntry[2], icon: ICONS.custom, unit: m.unit, isCustom: true
+    colorVar: colorEntry[2], icon: iconForCustomMetric(m.name), unit: m.unit, isCustom: true
   };
 }
 function setTabColor(type, colorKey){
@@ -928,7 +963,7 @@ function buildBarChart(entries, colorVar, emptyMsg){
   entries.forEach((e,i)=>{
     const h = Math.max(6, (e.amount/max) * (baseline-top));
     const x = xs[i] - w/2, y = baseline - h;
-    out += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="6" fill="var(${colorVar})"/>`;
+    out += `<rect${haloClass(colorVar)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="6" fill="var(${colorVar})"${haloRing(colorVar)}/>`;
     out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`;
   });
   return out;
@@ -948,11 +983,11 @@ function buildBpChart(entries, colorVar, emptyMsg){
   const diaPts = xs.map((x,i)=>[x, scale(diaVals[i])]);
   let out = '';
   if(entries.length > 1){
-    out += `<path d="${pointsToPath(sysPts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
-    out += `<path d="${pointsToPath(diaPts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 6" opacity="0.55"/>`;
+    out += `<path${haloClass(colorVar)} d="${pointsToPath(sysPts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+    out += `<path${haloClass(colorVar)} d="${pointsToPath(diaPts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 6" opacity="0.55"/>`;
   }
-  sysPts.forEach(p=> out += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})"/>`);
-  diaPts.forEach(p=> out += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})" opacity="0.55"/>`);
+  sysPts.forEach(p=> out += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
+  diaPts.forEach(p=> out += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})" opacity="0.55"${haloRing(colorVar)}/>`);
   entries.forEach((e,i)=> out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`);
   return out;
 }
@@ -965,8 +1000,8 @@ function buildSugarChart(entries, colorVar, emptyMsg){
   const scale = v => 90 - ((v-lo)/((hi-lo)||1)) * 78;
   const pts = xs.map((x,i)=>[x, scale(vals[i])]);
   let out = '';
-  if(entries.length > 1) out += `<path d="${pointsToPath(pts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
-  pts.forEach(p=> out += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})"/>`);
+  if(entries.length > 1) out += `<path${haloClass(colorVar)} d="${pointsToPath(pts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  pts.forEach(p=> out += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
   entries.forEach((e,i)=> out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`);
   return out;
 }
@@ -980,7 +1015,7 @@ function detailEntryRow(type, e){
   else { amt = `${e.value} ${meta ? meta.unit : ''}`.trim(); note = e.note || ''; }
   return `
     <div class="detail-entry" data-entry-id="${e.id}">
-      <div class="dot" style="background:var(${meta.colorVar});"></div>
+      <div class="dot${haloFillClass(meta.colorVar)}" style="background:var(${meta.colorVar});"></div>
       <div class="info"><div class="amt">${escapeHtml(amt)}</div>${note?`<div class="note">${escapeHtml(note)}</div>`:''}</div>
       <div class="time">${formatTime(e.ts)}</div>
     </div>`;
@@ -1064,10 +1099,10 @@ function buildSparkline(values, colorVar){
   if(pts.length > 1){
     const pathD = pointsToPath(pts);
     const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},64 L${xs[0].toFixed(1)},64 Z`;
-    svg += `<path d="${pathD}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+    svg += `<path${haloClass(colorVar)} d="${pathD}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
     svg += `<path d="${areaD}" fill="var(${colorVar})" opacity="0.08"/>`;
   }
-  pts.forEach(p=> svg += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4" fill="var(${colorVar})"/>`);
+  pts.forEach(p=> svg += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
   return {svg, current: present[present.length-1]};
 }
 function emptyChartSvg64(msg){
@@ -1119,7 +1154,7 @@ function trendCardHtml(type, dates, allEntries){
   return `
     <div class="trend-card" data-open-chart="${type}">
       <div class="trend-head">
-        <span class="trend-name" style="color:var(${meta.colorVar});">${escapeHtml(meta.label)}</span>
+        <span class="trend-name" style="color:var(${textSafeColorVar(meta)});">${escapeHtml(meta.label)}</span>
         <span class="trend-range">${rangeText}</span>
       </div>
       <div class="trend-current">${currentHtml}</div>
@@ -1169,10 +1204,10 @@ function buildExpandedChartSvg(type, rangeDays){
   if(pts.length > 1){
     const pathD = pointsToPath(pts);
     const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},${H-padB} L${xs[0].toFixed(1)},${H-padB} Z`;
-    out += `<path d="${pathD}" fill="none" stroke="var(${meta.colorVar})" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+    out += `<path${haloClass(meta.colorVar)} d="${pathD}" fill="none" stroke="var(${meta.colorVar})" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
     out += `<path d="${areaD}" fill="var(${meta.colorVar})" opacity="0.10"/>`;
   }
-  pts.forEach(p=> out += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="5" fill="var(${meta.colorVar})"/>`);
+  pts.forEach(p=> out += `<circle${haloClass(meta.colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="5" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`);
 
   // The value for each plotted day, right above its dot — the point of the
   // full-screen expand is to actually read numbers off the chart, not just
@@ -1742,7 +1777,7 @@ function renderSettingsPanel(){
     const meta = getMetricMeta(type);
     if(!meta) return '';
     const swatches = ALL_COLORS.map(([key,label,cssVar])=>
-      `<button class="swatch${key===meta.colorClass?' selected':''}" data-recolor="${type}" data-color="${key}" style="background:var(${cssVar});" aria-label="${label}"></button>`
+      `<button class="swatch${key===meta.colorClass?' selected':''}${haloFillClass(cssVar)}" data-recolor="${type}" data-color="${key}" style="background:var(${cssVar});" aria-label="${label}"></button>`
     ).join('');
     return `
       <div class="tabcolor-row">
@@ -1758,7 +1793,7 @@ function renderSettingsPanel(){
         return `
           <div class="settings-row" data-edit-metric="${m.id}" style="cursor:pointer;">
             <div class="settings-info">
-              <div class="settings-label"><span class="color-dot" style="background:var(${meta.colorVar});"></span>${escapeHtml(m.name)}</div>
+              <div class="settings-label"><span class="color-dot${haloFillClass(meta.colorVar)}" style="background:var(${meta.colorVar});"></span>${escapeHtml(m.name)}</div>
               <div class="settings-sub">Unit: ${escapeHtml(m.unit)}</div>
             </div>
             <span class="link">Edit</span>

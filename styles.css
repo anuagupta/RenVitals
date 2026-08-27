@@ -15,6 +15,8 @@
   --orange:#CB8A4E; --orange-soft:#F7ECDC;
   --purple:#8B7BC7; --purple-soft:#EBE8F7;
   --pink:#C97B9B;   --pink-soft:#F7E5EE;
+  --white:#FFFFFF;  --white-soft:#F1F0EC;
+  --white-halo: rgba(28,28,30,0.45);
   --danger:#C0392B;
 
   --glass-bg: color-mix(in srgb, var(--bg) 62%, transparent);
@@ -31,6 +33,7 @@
     --text:#F2F2F4; --text-dim:#9497A0; --hairline:rgba(255,255,255,0.08);
     --shadow:0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
     --blue-soft:#1E3040; --yellow-soft:#332C14; --red-soft:#3A2422; --red-light:#B97A70; --green-soft:#1A3327; --teal-soft:#173029; --orange-soft:#3A2C18; --purple-soft:#292440; --pink-soft:#3A2530;
+    --white-soft:#2E3038; --white-halo: rgba(0,0,0,0);
     --glass-edge: rgba(255,255,255,0.10); --glass-sheen: rgba(255,255,255,0.07);
   }
 }
@@ -39,6 +42,7 @@
   --text:#F2F2F4; --text-dim:#9497A0; --hairline:rgba(255,255,255,0.08);
   --shadow:0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
   --blue-soft:#1E3040; --yellow-soft:#332C14; --red-soft:#3A2422; --red-light:#B97A70; --green-soft:#1A3327; --teal-soft:#173029; --orange-soft:#3A2C18; --purple-soft:#292440; --pink-soft:#3A2530;
+  --white-soft:#2E3038; --white-halo: rgba(0,0,0,0);
   --glass-edge: rgba(255,255,255,0.10); --glass-sheen: rgba(255,255,255,0.07);
 }
 
@@ -206,6 +210,22 @@ main{flex:1;padding:18px 20px 100px;}
 }
 .card.teal .card-icon{color:var(--teal);}
 .card.teal .card-plus{background:var(--teal); box-shadow:inset 0 1px 1px rgba(255,255,255,0.5);}
+.card.white .card-top{
+  background:linear-gradient(135deg, color-mix(in srgb, var(--white) 55%, var(--surface-2)), color-mix(in srgb, var(--white) 20%, var(--surface-2)));
+  border-bottom:1px solid var(--hairline);
+}
+.card.white .card-icon{color:var(--text);}
+.card.white .card-plus{background:var(--white); color:var(--text); box-shadow:inset 0 0 0 1.5px var(--hairline);}
+
+/* White is the one accent that can vanish against the app's near-white
+   surfaces, so anything painted with it gets a thin outline instead of
+   being left illegible. tone-white-line: a soft halo for SVG chart
+   strokes/dots (drop-shadow follows the shape's own silhouette). tone-white-fill:
+   a crisp inset ring for solid dots/swatches. Both collapse to nothing in
+   dark mode, where white already reads fine on its own (--white-halo is
+   transparent there). See haloClass()/haloFillClass() in app.js. */
+.tone-white-line{ filter: drop-shadow(0 0 0.6px var(--white-halo)) drop-shadow(0 0 0.6px var(--white-halo)); }
+.tone-white-fill{ box-shadow: inset 0 0 0 1.5px var(--white-halo); }
 
 /* ---------- Trend / generic cards ---------- */
 .trend-card{

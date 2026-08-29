@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vitals — Dashboard</title>
+<meta name="description" content="A read-only view of Vitals health data.">
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* Dashboard-only additions — everything else comes from styles.css so
+     this matches the app exactly. */
+  .dash-wrap{max-width:480px;margin:0 auto;padding:20px 18px 60px;}
+  .dash-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+  .dash-title{font-family:var(--font-display);font-size:22px;font-weight:700;margin:0;}
+  .readonly-badge{
+    font-size:10.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;
+    padding:3px 8px;border-radius:7px;background:var(--surface-2);color:var(--text-dim);
+  }
+  .dash-status{font-size:12.5px;color:var(--text-dim);margin:2px 0 18px;}
+  .dash-status.err{color:var(--danger);}
+  .refresh-btn{
+    background:var(--surface);border:1px solid var(--hairline);border-radius:10px;
+    padding:6px 12px;font-size:12.5px;color:var(--text);font-family:var(--font-body);cursor:pointer;
+  }
+  .dash-section-head{display:flex;align-items:center;justify-content:space-between;margin:28px 0 12px;}
+  .dash-section-head h2{font-family:var(--font-display);font-size:16px;font-weight:600;margin:0;}
+  .range-row{display:flex;gap:6px;}
+  .range-btn{
+    font-size:12px;font-weight:600;padding:5px 11px;border-radius:8px;border:1px solid var(--hairline);
+    background:var(--surface);color:var(--text-dim);cursor:pointer;font-family:var(--font-body);
+  }
+  .range-btn.active{background:var(--text);color:var(--surface);border-color:var(--text);}
+
+  /* Lock screen */
+  #lock{
+    position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:var(--bg);gap:18px;padding:24px;text-align:center;
+  }
+  #lock.hidden{display:none;}
+  .lock-icon-badge{width:64px;height:64px;border-radius:20px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);color:var(--text-dim);}
+  .lock-icon-badge svg{width:28px;height:28px;}
+  .lock-title{font-family:var(--font-display);font-weight:700;font-size:18px;margin:0;}
+  .lock-sub{font-size:13.5px;color:var(--text-dim);margin:0 0 4px;max-width:280px;}
+  #passcode-input{
+    font-family:var(--font-display);font-size:22px;letter-spacing:0.15em;text-align:center;
+    width:160px;padding:10px 0;border-radius:12px;border:1px solid var(--hairline);background:var(--surface);color:var(--text);
+  }
+  #passcode-submit{
+    font-family:var(--font-body);font-weight:600;font-size:14px;padding:10px 22px;border-radius:12px;border:none;
+    background:var(--blue);color:#fff;cursor:pointer;
+  }
+  #passcode-err{color:var(--danger);font-size:12.5px;min-height:16px;}
+
+  #dash.hidden{display:none;}
+</style>
+</head>
+<body>
+
+<div id="lock">
+  <div class="lock-icon-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+  <p class="lock-title">Vitals — shared dashboard</p>
+  <p class="lock-sub">Enter the passcode to view. This is a read-only view — nothing here can be changed.</p>
+  <input id="passcode-input" type="password" inputmode="numeric" autocomplete="off" placeholder="••••">
+  <button id="passcode-submit">Unlock</button>
+  <p id="passcode-err"></p>
+</div>
+
+<div id="dash" class="hidden">
+  <div class="dash-wrap">
+    <div class="dash-header">
+      <p class="dash-title">Vitals</p>
+      <span class="readonly-badge">Read only</span>
+    </div>
+    <div class="dash-status" id="status">Loading…</div>
+    <div style="margin-bottom:18px;"><button class="refresh-btn" id="refresh-btn">Refresh now</button></div>
+
+    <div class="grid" id="tiles"></div>
+
+    <div class="dash-section-head">
+      <h2>Trends</h2>
+      <div class="range-row">
+        <button class="range-btn" data-range="7">7d</button>
+        <button class="range-btn" data-range="30">30d</button>
+      </div>
+    </div>
+    <div id="trends"></div>
+  </div>
+</div>
+
+<script src="dashboard.js"></script>
+</body>
+</html>

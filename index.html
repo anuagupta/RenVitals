@@ -16,7 +16,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<!-- The ?v= on styles.css/app.js/drive.js below forces phones and GitHub's
+     CDN to fetch the new file on the next deploy instead of quietly
+     reusing an old cached copy. Bump every one of these numbers (and
+     CACHE_NAME in service-worker.js) together on every future update,
+     even ones that only touch app.js — a stale cached app.js next to a
+     fresh index.html is how a brand-new button can render but do nothing. -->
+<link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
 
@@ -291,7 +297,7 @@
 10:00 PM: Tab Ceftum 250mg, Tab Betaloc 25mg</code>
         Each medicine on a line becomes its own entry at that time, set to repeat daily — edit days or delete any of them afterwards from the list below.
       </p>
-      <textarea class="note-input import-textarea" id="medicine-import-text" placeholder="8:00 AM: Tab Pan 40mg, Tab Amlo 5mg&#10;10:00 AM: Tab Wysolone 30mg&#10;…"></textarea>
+      <textarea class="note-input import-textarea" id="medicine-import-text" placeholder="8:00 AM: Tab Pan 40mg, Tab Amlo 5mg&#10;10:00 AM: Tab Wysolone 30mg&#10;…" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
       <p class="settings-sub" id="medicine-import-status" style="min-height:15px;"></p>
       <div class="sheet-btn-row" style="margin-top:2px;">
         <button class="save-btn" id="medicine-import-btn" type="button">Import</button>
@@ -333,7 +339,7 @@
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="drive.js"></script>
-<script src="app.js"></script>
+<script src="drive.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

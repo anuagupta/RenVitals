@@ -1667,8 +1667,18 @@ function parseImportTime(raw){
   }
   return null;
 }
+function normalizeImportText(text){
+  return (text||'')
+    // Mobile keyboards sometimes substitute a narrow/no-break space between
+    // a time and "AM"/"PM", or a typographic dash/colon variant, when a
+    // pasted block gets re-typeset by autocorrect — fold those back to the
+    // plain ASCII the parser below matches against.
+    .replace(/[   ⁠]/g, ' ')
+    .replace(/[‐-―−]/g, '-')
+    .replace(/[：]/g, ':');
+}
 function parseImportSchedule(text){
-  const lines = (text||'').split('\n');
+  const lines = normalizeImportText(text).split('\n');
   const parsed = []; const errors = [];
   lines.forEach((line, idx)=>{
     const raw = line.trim();

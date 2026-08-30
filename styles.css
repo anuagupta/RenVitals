@@ -427,6 +427,7 @@ svg.spark{width:100%;height:64px;display:block;margin-top:6px;}
   margin-bottom:4px;
 }
 .note-input::placeholder{color:var(--text-dim);}
+.import-textarea{min-height:220px;resize:vertical;line-height:1.5;font-variant-numeric:normal;}
 .sheet-btn-row{display:flex;gap:10px;margin-top:18px;}
 .save-btn{
   flex:1;padding:15px;border-radius:16px;border:none;

@@ -1644,6 +1644,82 @@ function shiftMedicineHistoryDay(deltaDays){
   currentHistoryDate = startOfDay(d.getTime());
   renderMedicineHistoryDay();
 }
+
+// ---------- Medicine schedule import (paste-in bulk add) ----------
+// One line per dose time: "8:00 AM: Medicine one, Medicine two". Every
+// medicine named on a line becomes its own daily medicine entry at that
+// time (per the "separate entry per time" model), so a twice-daily drug
+// just needs its name to appear on two different lines.
+function parseImportTime(raw){
+  raw = (raw||'').trim();
+  let m = raw.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if(m){
+    let h = parseInt(m[1],10); const mi = m[2]; const ap = m[3].toUpperCase();
+    if(h < 1 || h > 12) return null;
+    if(ap === 'AM'){ if(h===12) h=0; } else if(h!==12) h+=12;
+    return pad2(h)+':'+mi;
+  }
+  m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if(m){
+    const h = parseInt(m[1],10);
+    if(h < 0 || h > 23) return null;
+    return pad2(h)+':'+m[2];
+  }
+  return null;
+}
+function parseImportSchedule(text){
+  const lines = (text||'').split('\n');
+  const parsed = []; const errors = [];
+  lines.forEach((line, idx)=>{
+    const raw = line.trim();
+    if(!raw || raw.startsWith('#')) return;
+    const m = raw.match(/^(\d{1,2}:\d{2}\s*(?:AM|PM)?)\s*[:\-–]\s*(.+)$/i);
+    if(!m){ errors.push(`Line ${idx+1}: couldn't find a time (expected e.g. "8:00 AM: Medicine name")`); return; }
+    const time = parseImportTime(m[1]);
+    if(!time){ errors.push(`Line ${idx+1}: couldn't understand the time "${m[1].trim()}"`); return; }
+    const names = m[2].split(',').map(s=>s.trim()).filter(Boolean);
+    if(!names.length){ errors.push(`Line ${idx+1}: no medicine name found after the time`); return; }
+    names.forEach(name=>parsed.push({ name, time }));
+  });
+  return { parsed, errors };
+}
+function openMedicineImport(){
+  const status = $('#medicine-import-status');
+  status.textContent = '';
+  status.className = 'settings-sub';
+  $('#medicine-import').classList.add('show');
+}
+function closeMedicineImport(){
+  $('#medicine-import').classList.remove('show');
+}
+function importMedicinesFromText(){
+  const textarea = $('#medicine-import-text');
+  const status = $('#medicine-import-status');
+  const { parsed, errors } = parseImportSchedule(textarea.value);
+  if(!parsed.length){
+    status.textContent = errors.length ? errors.join(' · ') : 'Paste your schedule above first.';
+    status.className = 'settings-sub err';
+    return;
+  }
+  const medicines = DB.getMedicines();
+  const now = Date.now();
+  parsed.forEach((p, i)=>{
+    const medicine = {
+      id: genId(), name: p.name, dose: '', time: p.time, days: 'daily', tone: 'chime',
+      enabled: true, createdAt: now + i, updatedAt: now + i
+    };
+    medicines.push(medicine);
+    if(window.VitalsDrive && window.VitalsDrive.queueMedicineUpsert) window.VitalsDrive.queueMedicineUpsert(medicine);
+  });
+  DB.saveMedicines(medicines);
+  renderMedicinesList();
+  renderTodayChecklist();
+  scheduleAllMedicines();
+  const skipNote = errors.length ? ` (${errors.length} line${errors.length>1?'s':''} skipped — ${errors.join(' · ')})` : '';
+  status.textContent = `Imported ${parsed.length} dose${parsed.length>1?'s':''}.${skipNote}`;
+  status.className = errors.length ? 'settings-sub err' : 'settings-sub ok';
+  textarea.value = '';
+}
 function playTone(name){
   if(!name || name === 'silent') return;
   try{
@@ -2184,6 +2260,10 @@ function wireEvents(){
     currentHistoryDate = startOfDay(ts);
     renderMedicineHistoryDay();
   });
+
+  $('#import-medicines-btn').addEventListener('click', openMedicineImport);
+  $('#medicine-import-back').addEventListener('click', closeMedicineImport);
+  $('#medicine-import-btn').addEventListener('click', importMedicinesFromText);
 
   $('#theme-select').addEventListener('change', (e)=>{
     const settings = DB.getSettings();

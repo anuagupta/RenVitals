@@ -87,7 +87,10 @@
 
       <div class="section-title">
         All medicines
-        <span class="link" id="new-medicine-btn">+ New</span>
+        <span style="display:flex;gap:14px;">
+          <span class="link" id="import-medicines-btn">Import</span>
+          <span class="link" id="new-medicine-btn">+ New</span>
+        </span>
       </div>
       <div class="trend-card glass-card" id="medicines-list" style="padding:4px 16px;">
         <p class="empty-hint">No medicines yet.</p>
@@ -267,6 +270,32 @@
     </div>
     <div class="detail-body-wrap">
       <div class="trend-card" id="medicine-history-status-card" style="padding:6px 16px;"></div>
+    </div>
+  </div>
+
+  <!-- ============ MEDICINE SCHEDULE IMPORT (paste-in bulk add) ============ -->
+  <div class="detail" id="medicine-import">
+    <div class="detail-header">
+      <div class="detail-back" id="medicine-import-back">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg>
+      </div>
+      <div class="detail-titles">
+        <div class="cat">Medicines</div>
+        <div class="val">Import schedule</div>
+      </div>
+    </div>
+    <div class="detail-body-wrap">
+      <p class="hint-block" style="padding-top:0;">
+        Paste your schedule, one dose time per line, in the form <b>time: medicine, medicine, …</b> — for example:<br>
+        <code style="display:block;margin-top:8px;white-space:pre-wrap;font-size:12.5px;line-height:1.6;color:var(--text-dim);">8:00 AM: Tab Pan 40mg, Tab Amlo 5mg
+10:00 PM: Tab Ceftum 250mg, Tab Betaloc 25mg</code>
+        Each medicine on a line becomes its own entry at that time, set to repeat daily — edit days or delete any of them afterwards from the list below.
+      </p>
+      <textarea class="note-input import-textarea" id="medicine-import-text" placeholder="8:00 AM: Tab Pan 40mg, Tab Amlo 5mg&#10;10:00 AM: Tab Wysolone 30mg&#10;…"></textarea>
+      <p class="settings-sub" id="medicine-import-status" style="min-height:15px;"></p>
+      <div class="sheet-btn-row" style="margin-top:2px;">
+        <button class="save-btn" id="medicine-import-btn" type="button">Import</button>
+      </div>
     </div>
   </div>
 

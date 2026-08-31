@@ -1536,7 +1536,7 @@ function todaysDoseInstancesHtml(instances){
   instances.forEach(inst=>{
     const label = formatHHMM(inst.medicine.time);
     if(label !== lastLabel){
-      html += `<div class="dose-time-header">${label}</div>`;
+      html += `<div class="dose-time-header"><span>${label}</span></div>`;
       lastLabel = label;
     }
     html += doseRowHtml(inst);

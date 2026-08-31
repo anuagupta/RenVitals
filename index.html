@@ -22,7 +22,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 
@@ -92,13 +92,16 @@
       </div>
 
       <div class="section-title">
-        All medicines
+        <button class="collapsible-toggle-inline" id="medicines-list-toggle" aria-expanded="false" aria-controls="medicines-list" type="button">
+          All medicines
+          <svg class="chevron" id="medicines-list-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
         <span style="display:flex;gap:14px;">
           <span class="link" id="import-medicines-btn">Import</span>
           <span class="link" id="new-medicine-btn">+ New</span>
         </span>
       </div>
-      <div class="trend-card glass-card" id="medicines-list" style="padding:4px 16px;">
+      <div class="trend-card glass-card collapsed" id="medicines-list" style="padding:4px 16px;">
         <p class="empty-hint">No medicines yet.</p>
       </div>
       <p class="hint-block" id="notif-hint"></p>
@@ -340,6 +343,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="drive.js?v=2"></script>
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

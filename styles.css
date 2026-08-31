@@ -281,6 +281,14 @@ svg.spark{width:100%;height:64px;display:block;margin-top:6px;}
 .switch.on .switch-knob{left:20px;}
 
 /* ---------- Medicines: today's dose checklist (icon-only status) ---------- */
+/* A small label + rule marking where one dose time's group ends and the
+   next begins, e.g. between everything at 8:00 AM and everything at
+   10:00 AM — the list itself is already sorted chronologically. */
+.dose-time-header{
+  font-family:var(--font-body);font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;
+  color:var(--text-dim);padding:14px 4px 4px;border-top:1px solid var(--hairline);
+}
+.dose-time-header:first-child{border-top:none;padding-top:6px;}
 .dose-row{display:flex;align-items:center;gap:12px;padding:13px 4px;border-bottom:1px solid var(--hairline);}
 .dose-row:last-child{border-bottom:none;}
 .dose-check{
@@ -335,6 +343,16 @@ svg.spark{width:100%;height:64px;display:block;margin-top:6px;}
 .collapsible-toggle .chevron{transition:transform .2s ease;flex-shrink:0;color:var(--text-dim);}
 .collapsible-toggle .chevron.rotated{transform:rotate(90deg);}
 #tab-colors-list.collapsed{display:none;}
+/* A lighter variant that sits inline inside an existing .section-title
+   (e.g. "All medicines") instead of replacing it — same chevron behavior,
+   but inherits its parent's font/margin instead of setting its own. */
+.collapsible-toggle-inline{
+  background:none;border:none;padding:0;margin:0;cursor:pointer;
+  display:flex;align-items:center;gap:6px;font:inherit;color:inherit;
+}
+.collapsible-toggle-inline .chevron{transition:transform .2s ease;flex-shrink:0;color:var(--text-dim);}
+.collapsible-toggle-inline .chevron.rotated{transform:rotate(90deg);}
+#medicines-list.collapsed{display:none;}
 
 /* ---------- Tab bar ---------- */
 .tabbar{

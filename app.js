@@ -232,6 +232,15 @@ function applyTabColorsCollapsed(){
   toggle.setAttribute('aria-expanded', tabColorsCollapsed ? 'false' : 'true');
   if(chevron) chevron.classList.toggle('rotated', !tabColorsCollapsed);
 }
+function applyMedicinesListCollapsed(){
+  const panel = $('#medicines-list');
+  const toggle = $('#medicines-list-toggle');
+  const chevron = $('#medicines-list-chevron');
+  if(!panel || !toggle) return;
+  panel.classList.toggle('collapsed', medicinesListCollapsed);
+  toggle.setAttribute('aria-expanded', medicinesListCollapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !medicinesListCollapsed);
+}
 
 /* ---------------------------------------------------------------------
    Local custom-metric de-duplication (offline-safe cleanup)
@@ -333,6 +342,10 @@ let pinFirstEntry = '';
 // tracks whatever you've toggled it to since then, so re-rendering the
 // rest of Settings (e.g. on a Drive status change) doesn't fight your tap.
 let tabColorsCollapsed = true;
+// Same pattern for Medicines > "All medicines": always starts collapsed
+// each time you navigate INTO the Medicines tab (see showPanel below), so
+// the Today checklist is the first thing you see.
+let medicinesListCollapsed = true;
 let autoLockTimer = null;
 // How long the app can sit backgrounded (screen off, app switched away
 // from, tab hidden) before it re-locks itself. A PIN/biometric gate that
@@ -459,6 +472,12 @@ function showPanel(name){
     // of whatever state you left it in last time.
     tabColorsCollapsed = true;
     applyTabColorsCollapsed();
+  }
+  if(name === 'medicines'){
+    // All medicines always starts collapsed on entering the Medicines tab,
+    // regardless of whatever state you left it in last time.
+    medicinesListCollapsed = true;
+    applyMedicinesListCollapsed();
   }
 }
 
@@ -1507,12 +1526,29 @@ function doseRowHtml(inst){
       <button class="dose-skip" data-dose-skip>${skipLabel}</button>
     </div>`;
 }
+function todaysDoseInstancesHtml(instances){
+  // The list is already sorted chronologically by scheduledTs — this just
+  // drops a small time-label header in front of every run of doses that
+  // share the same scheduled clock time, e.g. separating everything at
+  // 8:00 AM from everything at 10:00 AM.
+  let html = '';
+  let lastLabel = null;
+  instances.forEach(inst=>{
+    const label = formatHHMM(inst.medicine.time);
+    if(label !== lastLabel){
+      html += `<div class="dose-time-header">${label}</div>`;
+      lastLabel = label;
+    }
+    html += doseRowHtml(inst);
+  });
+  return html;
+}
 function renderTodayChecklist(){
   const box = $('#medicines-today-list');
   if(!box) return;
   const instances = todaysDoseInstances();
   box.innerHTML = instances.length
-    ? instances.map(doseRowHtml).join('')
+    ? todaysDoseInstancesHtml(instances)
     : '<p class="empty-hint">No medicines scheduled for today.</p>';
 }
 function wireDoseChecklistDelegation(container){
@@ -1562,6 +1598,7 @@ function renderMedicinesList(){
   } else {
     hint.textContent = 'Medicines notify you every 5 minutes while a dose is overdue and Vitals has been opened recently, until you mark it taken or skipped. For best results, keep it installed to your home screen and avoid force-closing it.';
   }
+  applyMedicinesListCollapsed();
 }
 
 /* =========================================================================
@@ -2228,6 +2265,10 @@ function wireEvents(){
     });
   }
 
+  $('#medicines-list-toggle').addEventListener('click', ()=>{
+    medicinesListCollapsed = !medicinesListCollapsed;
+    applyMedicinesListCollapsed();
+  });
   $('#new-medicine-btn').addEventListener('click', async ()=>{
     const perm = await ensureNotificationPermission();
     if(perm !== 'granted') { }

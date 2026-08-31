@@ -22,7 +22,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 
@@ -118,6 +118,13 @@
             <option value="auto">Auto</option>
             <option value="light">Light</option>
             <option value="dark">Dark</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="settings-info"><div class="settings-label">Time format</div><div class="settings-sub">Applies everywhere in the app, including the time picker</div></div>
+          <select class="select-input" id="time-format-select">
+            <option value="12h">AM/PM</option>
+            <option value="24h">24-hour</option>
           </select>
         </div>
         <div class="settings-row">
@@ -343,6 +350,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="drive.js?v=2"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

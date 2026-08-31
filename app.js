@@ -32,7 +32,7 @@ const DB = {
   getColorOverrides(){ return this._get('vitals:colorOverrides', {}); },
   saveColorOverrides(o){ this._set('vitals:colorOverrides', o); },
   getSettings(){ return this._get('vitals:settings', {
-    pinHash:null, pinSalt:null, theme:'auto', bioEnabled:false, bioCredId:null, onboarded:false
+    pinHash:null, pinSalt:null, theme:'auto', timeFormat:'12h', bioEnabled:false, bioCredId:null, onboarded:false
   }); },
   saveSettings(s){ this._set('vitals:settings', s); }
 };
@@ -51,7 +51,11 @@ function escapeHtml(str){
 }
 function pad2(n){ return String(n).padStart(2,'0'); }
 function formatTime(ts){
-  return new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+  // hour12 is forced explicitly (from Settings > Time format, defaulting
+  // to AM/PM) — without it, toLocaleTimeString follows the phone's own
+  // clock setting instead of the app's own choice.
+  const use24h = DB.getSettings().timeFormat === '24h';
+  return new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit', hour12: !use24h});
 }
 function formatDateHeader(d){
   return d.toLocaleDateString([], {weekday:'long', day:'numeric', month:'long'});
@@ -482,6 +486,162 @@ function showPanel(name){
 }
 
 /* =========================================================================
+   CUSTOM TIME PICKER (AM/PM or 24-hour, per Settings > Time format)
+   Replaces the native <input type="time">, whose displayed format follows
+   the phone's own clock setting rather than the app's own choice. A
+   hidden input keeps the same id/.value contract ("HH:MM", 24-hour) the
+   rest of the app already reads, so saveEntry()/saveMedicineFromSheet()
+   need no changes — only the visual layer is new. Bounded (non-looping)
+   scroll-snap wheels: in 12-hour mode, hour 1–12 / minute 00–59 / AM-PM;
+   in 24-hour mode, hour 00–23 / minute 00–59 (no AM/PM column at all —
+   Settings > Time format changes the picker's own input, not just how
+   times are displayed elsewhere).
+   ========================================================================= */
+const WHEEL_ITEM_HEIGHT = 38;
+const WHEEL_VISIBLE_HEIGHT = 150;
+const WHEEL_PADDING = (WHEEL_VISIBLE_HEIGHT - WHEEL_ITEM_HEIGHT) / 2;
+
+function is24HourFormat(){ return DB.getSettings().timeFormat === '24h'; }
+
+function timePickerFieldHtml(id, hhmm){
+  return `
+    <div class="time-picker" data-time-picker="${id}">
+      <input type="hidden" id="${id}" value="${hhmm}">
+      <button type="button" class="time-picker-btn" data-time-picker-btn>
+        <span data-time-picker-label>${formatHHMM(hhmm)}</span>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+      </button>
+      <div class="time-wheel-panel" data-time-wheel-panel hidden>
+        <div class="time-wheel-highlight"></div>
+        <div class="time-wheel-row">
+          <div class="time-wheel-col" data-wheel="hour"></div>
+          <div class="time-wheel-col" data-wheel="minute"></div>
+          <div class="time-wheel-col" data-wheel="ampm"></div>
+        </div>
+        <button type="button" class="wheel-done-btn" data-time-picker-done>Done</button>
+      </div>
+    </div>`;
+}
+function wheelItemsFor(kind, use24h){
+  if(kind === 'hour') return use24h
+    ? Array.from({length:24}, (_,i)=>pad2(i))
+    : Array.from({length:12}, (_,i)=>String(i+1));
+  if(kind === 'minute') return Array.from({length:60}, (_,i)=>pad2(i));
+  return ['AM','PM'];
+}
+function clampInt(n, lo, hi){ return Math.max(lo, Math.min(hi, n)); }
+function wheelCenterIndex(col){ return Math.round(col.scrollTop / WHEEL_ITEM_HEIGHT); }
+function scrollWheelTo(col, index){ col.scrollTop = index * WHEEL_ITEM_HEIGHT; }
+function renderWheelColumn(col, kind, selectedIndex, use24h){
+  const items = wheelItemsFor(kind, use24h);
+  col.innerHTML = items.map((label,i)=>
+    `<div class="wheel-item${i===selectedIndex?' wheel-item-center':''}" data-wheel-index="${i}">${label}</div>`
+  ).join('');
+  col.style.paddingTop = WHEEL_PADDING + 'px';
+  col.style.paddingBottom = WHEEL_PADDING + 'px';
+}
+function setWheelCenterClasses(col){
+  const idx = wheelCenterIndex(col);
+  $all('.wheel-item', col).forEach(el=>{
+    el.classList.toggle('wheel-item-center', parseInt(el.dataset.wheelIndex,10) === idx);
+  });
+  return idx;
+}
+function readWheelValue(panel, use24h){
+  const hourCol = panel.querySelector('[data-wheel="hour"]');
+  const minuteCol = panel.querySelector('[data-wheel="minute"]');
+  const hourItems = wheelItemsFor('hour', use24h);
+  const minuteItems = wheelItemsFor('minute', use24h);
+  const minute = parseInt(minuteItems[clampInt(wheelCenterIndex(minuteCol), 0, minuteItems.length-1)], 10);
+  if(use24h){
+    const hour = parseInt(hourItems[clampInt(wheelCenterIndex(hourCol), 0, hourItems.length-1)], 10);
+    return pad2(hour) + ':' + pad2(minute);
+  }
+  const ampmCol = panel.querySelector('[data-wheel="ampm"]');
+  const ampmItems = wheelItemsFor('ampm', use24h);
+  const hour12 = parseInt(hourItems[clampInt(wheelCenterIndex(hourCol), 0, hourItems.length-1)], 10);
+  const ampm = ampmItems[clampInt(wheelCenterIndex(ampmCol), 0, ampmItems.length-1)];
+  let h24 = hour12 % 12;
+  if(ampm === 'PM') h24 += 12;
+  return pad2(h24) + ':' + pad2(minute);
+}
+function timePickerPartsFromValue(hhmm, use24h){
+  const parts = (hhmm||'00:00').split(':').map(Number);
+  const h = parts[0], m = parts[1];
+  const minuteIndex = isNaN(m)?0:m;
+  if(use24h) return { hourIndex: isNaN(h)?0:h, minuteIndex, ampmIndex: 0 };
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour12 = (h % 12) || 12;
+  return { hourIndex: hour12-1, minuteIndex, ampmIndex: ampm==='AM'?0:1 };
+}
+function initTimeWheelPickers(root){
+  $all('[data-time-picker]', root).forEach(wrap=>{
+    const id = wrap.dataset.timePicker;
+    const hiddenInput = $('#'+id);
+    const btn = wrap.querySelector('[data-time-picker-btn]');
+    const label = wrap.querySelector('[data-time-picker-label]');
+    const panel = wrap.querySelector('[data-time-wheel-panel]');
+    const doneBtn = wrap.querySelector('[data-time-picker-done]');
+    const hourCol = panel.querySelector('[data-wheel="hour"]');
+    const minuteCol = panel.querySelector('[data-wheel="minute"]');
+    const ampmCol = panel.querySelector('[data-wheel="ampm"]');
+
+    function renderAllColumns(){
+      const use24h = is24HourFormat();
+      ampmCol.hidden = use24h;
+      const parts = timePickerPartsFromValue(hiddenInput.value, use24h);
+      renderWheelColumn(hourCol, 'hour', parts.hourIndex, use24h);
+      renderWheelColumn(minuteCol, 'minute', parts.minuteIndex, use24h);
+      scrollWheelTo(hourCol, parts.hourIndex);
+      scrollWheelTo(minuteCol, parts.minuteIndex);
+      if(!use24h){
+        renderWheelColumn(ampmCol, 'ampm', parts.ampmIndex, use24h);
+        scrollWheelTo(ampmCol, parts.ampmIndex);
+      }
+    }
+    function commitFromWheel(){
+      const val = readWheelValue(panel, is24HourFormat());
+      hiddenInput.value = val;
+      label.textContent = formatHHMM(val);
+    }
+    const scrollTimers = {};
+    function wireColScroll(col, key){
+      col.addEventListener('scroll', ()=>{
+        setWheelCenterClasses(col);
+        clearTimeout(scrollTimers[key]);
+        scrollTimers[key] = setTimeout(()=>{
+          const items = wheelItemsFor(key, is24HourFormat());
+          const clamped = clampInt(wheelCenterIndex(col), 0, items.length-1);
+          if(clamped !== wheelCenterIndex(col)) scrollWheelTo(col, clamped);
+          setWheelCenterClasses(col);
+          commitFromWheel();
+        }, 120);
+      }, { passive:true });
+      col.addEventListener('click', (e)=>{
+        const item = e.target.closest('.wheel-item');
+        if(!item) return;
+        col.scrollTo({ top: parseInt(item.dataset.wheelIndex,10) * WHEEL_ITEM_HEIGHT, behavior:'smooth' });
+      });
+    }
+    wireColScroll(hourCol, 'hour');
+    wireColScroll(minuteCol, 'minute');
+    wireColScroll(ampmCol, 'ampm');
+
+    btn.addEventListener('click', ()=>{
+      const opening = panel.hidden;
+      panel.hidden = !opening;
+      btn.classList.toggle('open', opening);
+      if(opening) renderAllColumns();
+    });
+    doneBtn.addEventListener('click', ()=>{
+      commitFromWheel();
+      panel.hidden = true;
+      btn.classList.remove('open');
+    });
+  });
+}
+
+/* =========================================================================
    ADD / EDIT SHEET
    ========================================================================= */
 function fieldsHtmlFor(kind, existing){
@@ -502,7 +662,7 @@ function fieldsHtmlFor(kind, existing){
       <div class="field-label">Dose <span style="text-transform:none;font-weight:400;">(optional)</span></div>
       <div class="input-row"><input type="text" id="medicine-dose" placeholder="e.g. 1 tablet, 2mg" value="${existing&&existing.dose?escapeHtml(existing.dose):''}"></div>
       <div class="field-label">Time</div>
-      <div class="input-row"><input type="time" id="medicine-time" value="${timeVal}"></div>
+      ${timePickerFieldHtml('medicine-time', timeVal)}
       <div class="field-label">Repeat on</div>
       <div class="chips" id="medicine-days">${dayChips}</div>
       <div class="field-label">Reminder tone <span style="text-transform:none;font-weight:400;">(tap to preview)</span></div>
@@ -533,7 +693,7 @@ function fieldsHtmlFor(kind, existing){
       <div class="field-label">When <span style="text-transform:none;font-weight:400;">(any past date works)</span></div>
       <div class="when-row">
         <div class="input-row"><input type="date" id="entry-date" value="${dateVal}" max="${toDateInputValue(Date.now())}"></div>
-        <div class="input-row"><input type="time" id="entry-time" value="${timeVal}"></div>
+        ${timePickerFieldHtml('entry-time', timeVal)}
       </div>`;
 
   if(kind === 'bp'){
@@ -607,6 +767,7 @@ function openSheet(kind, editId){
     : isNewMetric ? 'Shows up as its own card on Home and Trends'
     : ('Now · ' + formatTime(Date.now()));
   $('#sheet-fields').innerHTML = fieldsHtmlFor(kind, existing);
+  initTimeWheelPickers($('#sheet-fields'));
 
   const noteLabel = $('#note-field-label'), noteInput = $('#sheet-note');
   if(isMedicine || isNewMetric){
@@ -2083,6 +2244,7 @@ function formatRelativeShort(ts){
 function renderSettingsPanel(){
   const settings = DB.getSettings();
   $('#theme-select').value = settings.theme || 'auto';
+  $('#time-format-select').value = settings.timeFormat || '12h';
   $('#pin-status-sub').textContent = settings.pinHash ? 'Passcode required to open' : 'No passcode set';
   const bioSupported = !!window.PublicKeyCredential;
   $('#bio-toggle').classList.toggle('on', !!settings.bioEnabled);
@@ -2321,6 +2483,12 @@ function wireEvents(){
     settings.theme = e.target.value;
     DB.saveSettings(settings);
     applyTheme(settings.theme);
+  });
+  $('#time-format-select').addEventListener('change', (e)=>{
+    const settings = DB.getSettings();
+    settings.timeFormat = e.target.value;
+    DB.saveSettings(settings);
+    renderAll();
   });
   $('#change-pin-btn').addEventListener('click', ()=>{
     const settings = DB.getSettings();

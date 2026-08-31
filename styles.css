@@ -429,6 +429,46 @@ svg.spark{width:100%;height:64px;display:block;margin-top:6px;}
 .swatch.selected{box-shadow:0 0 0 3px var(--surface), 0 0 0 5px var(--text);}
 .when-row{display:flex;gap:10px;}
 .when-row .input-row{flex:1;min-width:0;}
+.when-row .time-picker{flex:1;min-width:0;}
+
+/* ---------- Custom AM/PM time picker (replaces native <input type="time">,
+   whose displayed format otherwise follows the phone's own 24-hour clock
+   setting) ---------- */
+.time-picker{position:relative;}
+.time-picker-btn{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  border-radius:14px;padding:12px 14px;border:1px solid var(--hairline);
+  background:color-mix(in srgb, var(--surface-2) 75%, transparent);
+  font-family:var(--font-display);font-size:17px;font-weight:600;color:var(--text);
+  cursor:pointer;font-variant-numeric:tabular-nums;
+}
+.time-picker-btn svg{color:var(--text-dim);flex-shrink:0;transition:transform .2s ease;}
+.time-picker-btn.open svg{transform:rotate(180deg);}
+.time-wheel-panel{
+  margin-top:10px;border-radius:16px;border:1px solid var(--hairline);background:var(--surface-2);
+  padding:12px;position:relative;
+}
+.time-wheel-row{display:flex;justify-content:center;gap:14px;position:relative;height:150px;}
+.time-wheel-col{
+  width:64px;overflow-y:auto;scroll-snap-type:y mandatory;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;
+}
+.time-wheel-col::-webkit-scrollbar{display:none;}
+.wheel-item{
+  height:38px;display:flex;align-items:center;justify-content:center;
+  scroll-snap-align:center;font-family:var(--font-display);font-variant-numeric:tabular-nums;
+  font-size:15px;color:var(--text-dim);opacity:0.45;cursor:pointer;transition:opacity .15s ease;
+}
+.wheel-item-center{font-size:19px;font-weight:700;color:var(--text);opacity:1;}
+.time-wheel-highlight{
+  position:absolute;left:12px;right:12px;top:50%;transform:translateY(-50%);
+  height:38px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);pointer-events:none;
+}
+.wheel-done-btn{
+  margin-top:12px;width:100%;padding:12px;border-radius:12px;border:none;
+  background:var(--blue);color:#fff;font-family:var(--font-display);font-weight:600;font-size:14.5px;cursor:pointer;
+}
+.wheel-done-btn:active{opacity:0.85;}
 .input-row{
   display:flex;align-items:center;border-radius:14px;padding:12px 14px;
   background:color-mix(in srgb, var(--surface-2) 75%, transparent);

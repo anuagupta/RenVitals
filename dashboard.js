@@ -1,25 +1,29 @@
 'use strict';
 /* =========================================================================
    Vitals — dashboard.js
-   A read-only, passcode-gated view of the same data the phone app shows,
-   built for sharing as a single link. No editing, no local storage of
-   health data, no write access of any kind — it only ever reads from the
-   public "anyone with the link can view" Google Sheet the app already
-   backs up to.
+   A read-only mirror of the app's own Home / Trends / Medicines screens,
+   built for sharing as a single link that looks and navigates exactly like
+   the app (tap a card for its day-by-day detail, tap a medicine for its
+   history) but cannot write anything anywhere. It only ever reads — no
+   passcode, no local storage of health data, and every control that could
+   change data in the real app (add/edit/delete entries, toggle a dose,
+   enable/disable a medicine, add a health parameter) simply doesn't exist
+   here. The only interactive controls left are pure navigation: switching
+   tabs, opening a detail screen, and stepping/jumping between days.
 
-   The passcode is a soft lock, not real security: this is a static page,
-   so anyone who opened the browser dev tools could read the hash below or
-   just call the sheet URL directly. It exists to keep a shared link from
-   being casually opened by the wrong person, not to withstand someone
-   determined. That's the tradeoff that was agreed on when this was built.
+   Data comes straight from the public "anyone with the link can view" tabs
+   of the same Google Sheet the app backs up to (Sheet1, Metrics, Medicines,
+   DoseLog) — never from a browser's localStorage, since this page is meant
+   to open identically on any device. rowToEntry/rowToMetric/rowToMedicine/
+   rowToDoseLog mirror drive.js's own row parsers exactly, since that's the
+   format this sheet is actually written in.
    ========================================================================= */
 
 const SHEET_ID = '1uo5E1Zc-cNFA79WiO_IAtnG-cIKeYnGstyE21AkqpiM';
 const SHEET_TAB = 'Sheet1';
 const METRICS_TAB = 'Metrics';
-// SHA-256 of the passcode. Never store the passcode itself in this file.
-const PASSCODE_HASH = '0ee372d0a0fefa4431a2ece96d93c06f3984e8cb8d2d1c4003549e975413bf3e';
-const UNLOCK_KEY = 'vitals-dash:unlocked';
+const MEDICINES_TAB = 'Medicines';
+const DOSELOG_TAB = 'DoseLog';
 const REFRESH_MS = 60000;
 
 function csvUrl(tab){
@@ -60,8 +64,7 @@ async function fetchTab(tab){
 }
 
 /* ---------------------------------------------------------------------
-   Row → entry / metric (mirrors drive.js's rowToEntry exactly, since
-   that's the format this sheet is actually written in)
+   Row → record (mirrors drive.js's own row parsers exactly)
    --------------------------------------------------------------------- */
 function rowToEntry(row){
   if(!row || !row[0]) return null;
@@ -93,8 +96,11 @@ function rowToEntry(row){
       entry.value = Number(row[14]);
     } else if(row[11] !== '' && row[11] != null && !isNaN(Number(row[11]))){
       entry.value = Number(row[11]);
+    } else {
+      entry.value = null;
     }
   }
+  entry.note = row[11] || '';
   return entry;
 }
 
@@ -103,6 +109,41 @@ function rowToMetric(row){
   const deleted = String(row[5] || '').toUpperCase() === 'TRUE';
   if(deleted) return null;
   return {id: row[0], name: row[1] || 'Custom metric', unit: row[2] || '', colorClass: row[3] || 'orange'};
+}
+
+function rowToMedicine(row){
+  if(!row || !row[0]) return null;
+  const name = String(row[1] || '').trim();
+  const deleted = String(row[9] || '').toUpperCase() === 'TRUE';
+  if(deleted || !name) return null;
+  let days = 'daily';
+  try{
+    const parsed = JSON.parse(row[4]);
+    if(parsed === 'daily' || Array.isArray(parsed)) days = parsed;
+  } catch(e){ days = 'daily'; }
+  return {
+    id: String(row[0]), name,
+    dose: row[2] || '',
+    time: row[3] || '',
+    days,
+    enabled: String(row[6] || '').toUpperCase() === 'TRUE',
+    createdAt: Number(row[7]) || 0,
+    updatedAt: Number(row[8]) || 0
+  };
+}
+
+function rowToDoseLog(row){
+  if(!row || !row[0]) return null;
+  const deleted = String(row[6] || '').toUpperCase() === 'TRUE';
+  if(deleted) return null;
+  return {
+    id: String(row[0]),
+    medicineId: row[1] || '',
+    date: row[2] || '',
+    time: row[3] || '',
+    status: row[4] || '',
+    updatedAt: Number(row[5]) || 0
+  };
 }
 
 /* ---------------------------------------------------------------------
@@ -135,6 +176,7 @@ const TYPE_META = {
 };
 function haloClass(colorVar){ return colorVar === '--white' ? ' class="tone-white-line"' : ''; }
 function haloRing(colorVar){ return colorVar === '--white' ? ' stroke="var(--white-halo)" stroke-width="1"' : ''; }
+function haloFillClass(colorVar){ return colorVar === '--white' ? ' tone-white-fill' : ''; }
 function textSafeColorVar(colorClass, colorVar){ return colorClass === 'white' ? '--text' : colorVar; }
 
 function getMetricMeta(type, customMetrics){
@@ -148,8 +190,9 @@ function allTypesInOrder(customMetrics){
 }
 
 /* ---------------------------------------------------------------------
-   Date helpers (local time, same rules as the app)
+   Date / time helpers (local time, same rules as the app)
    --------------------------------------------------------------------- */
+function pad2(n){ return String(n).padStart(2,'0'); }
 function startOfDay(ts){ const d = new Date(ts); d.setHours(0,0,0,0); return d.getTime(); }
 function isToday(ts){ return startOfDay(ts) === startOfDay(Date.now()); }
 function sameDay(ts, dateObj){ return startOfDay(ts) === startOfDay(dateObj.getTime()); }
@@ -161,11 +204,25 @@ function lastNDates(n){
   }
   return out;
 }
+function toDateInputValue(ts){ const d = new Date(ts); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+function dateKeyForDate(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+function todayKey(){ return dateKeyForDate(new Date()); }
 function formatTime(ts){ return new Date(ts).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}); }
+function formatHHMM(hhmm){
+  const parts = (hhmm||'0:0').split(':').map(Number);
+  const d = new Date(); d.setHours(parts[0]||0, parts[1]||0, 0, 0);
+  return formatTime(d.getTime());
+}
+function dayNavLabel(ts){
+  if(isToday(ts)) return 'Today';
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1);
+  if(sameDay(ts, yesterday)) return 'Yesterday';
+  return new Date(ts).toLocaleDateString([], {weekday:'short', day:'numeric', month:'short'});
+}
 function escapeHtml(str){
   return String(str==null?'':str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function avg(list){ return list.reduce((s,v)=>s+v,0) / list.length; }
+function avg(list){ return list.reduce((s,v)=>s+v,0) / (list.length||1); }
 function roundSmart(v, digits){
   if(Math.abs(v) >= 100) return Math.round(v);
   const f = Math.pow(10, digits);
@@ -201,7 +258,7 @@ function tileHtml(type, entries, customMetrics){
   }
 
   return `
-    <div class="card ${meta.colorClass}">
+    <div class="card ${meta.colorClass}" data-open-detail="${type}" role="button" tabindex="0" style="cursor:pointer;">
       <div class="card-top">
         <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${meta.icon}</svg></div>
       </div>
@@ -214,7 +271,7 @@ function tileHtml(type, entries, customMetrics){
 }
 
 /* ---------------------------------------------------------------------
-   Trends (sparkline cards)
+   Trends (sparkline cards — same as the app's Trends tab)
    --------------------------------------------------------------------- */
 function dailySeriesFor(type, dates, list){
   if(type==='liquid' || type==='urine'){
@@ -291,26 +348,363 @@ function trendHtml(type, dates, rangeDays, entries, customMetrics){
 }
 
 /* ---------------------------------------------------------------------
-   Page wiring
+   Detail drill-down (day chart + entry list) — same charts the app's
+   own detail screen draws, just with no tap-to-edit on the rows.
    --------------------------------------------------------------------- */
-let ENTRIES = [], CUSTOM_METRICS = {};
-let trendRange = 7;
-
-async function sha256Hex(text){
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+function xPositionsByTime(entries){
+  const n = entries.length;
+  if(n <= 1) return [150];
+  const pad = 20;
+  const mins = entries.map(e=>{ const d = new Date(e.ts); return d.getHours()*60 + d.getMinutes(); });
+  const lo = Math.min(...mins), hi = Math.max(...mins);
+  const span = (hi - lo) || 1;
+  return mins.map(m => pad + ((m-lo)/span) * (300 - pad*2));
+}
+function emptyChartSvg(msg){
+  return `<text x="150" y="60" text-anchor="middle" fill="var(--text-dim)" font-size="13" font-family="var(--font-body)">${escapeHtml(msg)}</text>`;
+}
+function buildBarChart(entries, colorVar, emptyMsg){
+  if(!entries.length) return emptyChartSvg(emptyMsg || 'No entries logged today');
+  const xs = xPositionsByTime(entries);
+  const max = Math.max(...entries.map(e=>e.amount), 1);
+  const baseline = 90, top = 8;
+  const minGap = xs.length > 1 ? Math.min(...xs.slice(1).map((x,i)=>x-xs[i])) : 300;
+  const w = Math.max(10, Math.min(34, minGap*0.6));
+  let out = '';
+  entries.forEach((e,i)=>{
+    const h = Math.max(6, (e.amount/max) * (baseline-top));
+    const x = xs[i] - w/2, y = baseline - h;
+    out += `<rect${haloClass(colorVar)} x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" rx="6" fill="var(${colorVar})"${haloRing(colorVar)}/>`;
+    out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`;
+  });
+  return out;
+}
+function buildBpChart(entries, colorVar, emptyMsg){
+  colorVar = colorVar || '--red';
+  if(!entries.length) return emptyChartSvg(emptyMsg || 'No readings logged today');
+  const xs = xPositionsByTime(entries);
+  const sysVals = entries.map(e=>e.systolic), diaVals = entries.map(e=>e.diastolic);
+  const all = sysVals.concat(diaVals);
+  const lo = Math.min(...all) - 5, hi = Math.max(...all) + 5;
+  const scale = v => 90 - ((v-lo)/((hi-lo)||1)) * 78;
+  const sysPts = xs.map((x,i)=>[x, scale(sysVals[i])]);
+  const diaPts = xs.map((x,i)=>[x, scale(diaVals[i])]);
+  let out = '';
+  if(entries.length > 1){
+    out += `<path${haloClass(colorVar)} d="${pointsToPath(sysPts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+    out += `<path${haloClass(colorVar)} d="${pointsToPath(diaPts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 6" opacity="0.55"/>`;
+  }
+  sysPts.forEach(p=> out += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
+  diaPts.forEach(p=> out += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})" opacity="0.55"${haloRing(colorVar)}/>`);
+  entries.forEach((e,i)=> out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`);
+  return out;
+}
+function buildSugarChart(entries, colorVar, emptyMsg){
+  colorVar = colorVar || '--green';
+  if(!entries.length) return emptyChartSvg(emptyMsg || 'No readings logged today');
+  const xs = xPositionsByTime(entries);
+  const vals = entries.map(e=>e.value);
+  const lo = Math.min(...vals) - 10, hi = Math.max(...vals) + 10;
+  const scale = v => 90 - ((v-lo)/((hi-lo)||1)) * 78;
+  const pts = xs.map((x,i)=>[x, scale(vals[i])]);
+  let out = '';
+  if(entries.length > 1) out += `<path${haloClass(colorVar)} d="${pointsToPath(pts)}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+  pts.forEach(p=> out += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4.5" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
+  entries.forEach((e,i)=> out += `<text x="${xs[i].toFixed(1)}" y="106" class="time-label" text-anchor="middle">${formatTime(e.ts).replace(' ','').toLowerCase()}</text>`);
+  return out;
+}
+function detailEntryRow(type, e, meta){
+  let amt, note;
+  if(type==='liquid' || type==='urine'){ amt = `${e.amount} mL`; note = [e.drink, e.note].filter(Boolean).join(' · '); }
+  else if(type==='bp'){ amt = `${e.systolic} / ${e.diastolic} mmHg`; note = [e.pulse?`Pulse ${e.pulse}`:'', e.note].filter(Boolean).join(' · '); }
+  else if(type==='sugar'){
+    const contextLabel = {fasting:'Fasting', before:'Before meal', after:'After meal'};
+    amt = `${e.value} mg/dL`; note = [contextLabel[e.context]||'Fasting', e.note].filter(Boolean).join(' · ');
+  } else { amt = `${e.value != null ? e.value : '—'} ${meta ? meta.unit : ''}`.trim(); note = e.note || ''; }
+  return `
+    <div class="detail-entry">
+      <div class="dot${haloFillClass(meta.colorVar)}" style="background:var(${meta.colorVar});"></div>
+      <div class="info"><div class="amt">${escapeHtml(amt)}</div>${note?`<div class="note">${escapeHtml(note)}</div>`:''}</div>
+      <div class="time">${formatTime(e.ts)}</div>
+    </div>`;
+}
+function detailHeaderValue(type, dayEntries, meta, onToday){
+  if(!dayEntries.length) return onToday ? 'No entries today' : 'No entries';
+  if(type==='liquid' || type==='urine'){
+    const total = dayEntries.reduce((s,e)=>s+e.amount,0);
+    return `${total.toLocaleString()} mL` + (onToday ? ' today' : '');
+  }
+  const last = dayEntries[dayEntries.length-1];
+  if(type==='bp') return `${last.systolic} / ${last.diastolic} mmHg` + (last.pulse?` · pulse ${last.pulse}`:'');
+  if(type==='sugar'){
+    const contextLabel = {fasting:'Fasting', before:'Before meal', after:'After meal'};
+    return `${last.value} mg/dL · ${contextLabel[last.context]||'Fasting'}`;
+  }
+  return `${last.value != null ? last.value : '—'} ${meta ? meta.unit : ''}`.trim();
 }
 
-function render(){
+let currentDetailType = null, currentDetailDate = null;
+
+function openDetail(type, dateTs){
+  currentDetailType = type;
+  currentDetailDate = startOfDay(dateTs != null ? dateTs : Date.now());
+  const meta = getMetricMeta(type, CUSTOM_METRICS);
+  if(!meta) return;
+  const onToday = isToday(currentDetailDate);
+  const dayDate = new Date(currentDetailDate);
+  const dayEntries = ENTRIES.filter(e=>e.type===type && sameDay(e.ts, dayDate)).sort((a,b)=>a.ts-b.ts);
+
+  document.getElementById('detail-cat').textContent = meta.label;
+  document.getElementById('detail-val').textContent = detailHeaderValue(type, dayEntries, meta, onToday);
+  document.getElementById('detail-day-label').textContent = dayNavLabel(currentDetailDate);
+  const dateInput = document.getElementById('detail-date-input');
+  dateInput.max = toDateInputValue(Date.now());
+  dateInput.value = toDateInputValue(currentDetailDate);
+  document.getElementById('detail-next-day').disabled = onToday;
+  document.getElementById('detail-list-title').textContent = onToday ? "Today's entries" : `${dayNavLabel(currentDetailDate)}'s entries`;
+
+  const emptyMsg = onToday ? undefined : 'No entries logged on this day';
+  let chartSvg;
+  if(type==='liquid' || type==='urine') chartSvg = buildBarChart(dayEntries, meta.colorVar, emptyMsg);
+  else if(type==='bp') chartSvg = buildBpChart(dayEntries, meta.colorVar, emptyMsg);
+  else chartSvg = buildSugarChart(dayEntries, meta.colorVar, emptyMsg);
+  document.getElementById('detail-chart').innerHTML = chartSvg;
+
+  document.getElementById('detail-entries').innerHTML = dayEntries.length
+    ? dayEntries.slice().reverse().map(e=>detailEntryRow(type,e,meta)).join('')
+    : `<p class="empty-hint">No entries logged ${onToday ? 'today' : 'on this day'}.</p>`;
+
+  document.getElementById('detail').classList.add('show');
+}
+function shiftDetailDay(deltaDays){
+  const d = new Date(currentDetailDate);
+  d.setDate(d.getDate() + deltaDays);
+  if(startOfDay(d.getTime()) > startOfDay(Date.now())) return;
+  openDetail(currentDetailType, d.getTime());
+}
+function closeDetail(){
+  document.getElementById('detail').classList.remove('show');
+  currentDetailType = null; currentDetailDate = null;
+}
+
+/* ---------------------------------------------------------------------
+   Medicines — Today checklist (status only, nothing tappable) and All
+   medicines (tap a row for its day-by-day history).
+   --------------------------------------------------------------------- */
+const DOSE_CHECK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+const DOSE_DASH_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M6 12h12"/></svg>';
+
+function matchesTodayMed(medicine, date){
+  if(medicine.days === 'daily') return true;
+  return Array.isArray(medicine.days) && medicine.days.includes(date.getDay());
+}
+function doseKeyFor(medId, dateKey, time){ return medId+'|'+dateKey+'|'+time; }
+function getDoseStatus(doseKey){
+  const entry = DOSELOG[doseKey];
+  return entry ? entry.status : 'pending';
+}
+function repeatDaysText(m){
+  if(m.days === 'daily') return 'Daily';
+  if(!m.days || !m.days.length) return 'Once';
+  const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return m.days.slice().sort().map(d=>names[d]).join(', ');
+}
+function doseUrgency(inst, now){
+  if(inst.status === 'taken') return 'taken';
+  if(inst.status === 'skipped') return 'skipped';
+  return (now - inst.scheduledTs) >= 15*60*1000 ? 'overdue' : 'pending';
+}
+function todaysDoseInstances(){
+  const now = new Date();
+  const dateKey = todayKey();
+  const meds = MEDICINES.filter(m=>m.enabled).filter(m=>matchesTodayMed(m, now));
+  const instances = meds.map(m=>{
+    const parts = (m.time||'').split(':').map(Number);
+    const h = parts[0], mi = parts[1];
+    const sched = new Date(now);
+    if(!isNaN(h)) sched.setHours(h, isNaN(mi)?0:mi, 0, 0);
+    const status = getDoseStatus(doseKeyFor(m.id, dateKey, m.time));
+    return { medicine:m, scheduledTs: sched.getTime(), status };
+  });
+  instances.sort((a,b)=>a.scheduledTs-b.scheduledTs);
+  return instances;
+}
+function doseRowHtml(inst){
+  const urgency = doseUrgency(inst, Date.now());
+  const iconClass = urgency === 'pending' ? '' : ' '+urgency;
+  const iconSvg = urgency === 'taken' ? DOSE_CHECK_ICON : urgency === 'skipped' ? DOSE_DASH_ICON : '';
+  const statusText = {taken:'Taken', skipped:'Skipped', overdue:'Overdue', pending:'Not yet due'}[urgency];
+  return `
+    <div class="dose-row">
+      <div class="dose-check${iconClass}" style="cursor:default;">${iconSvg}</div>
+      <div class="alarm-info"><div class="alarm-label">${escapeHtml(inst.medicine.name)}${inst.medicine.dose?` <span style="font-weight:400;color:var(--text-dim);">· ${escapeHtml(inst.medicine.dose)}</span>`:''}</div><div class="alarm-sub">${formatHHMM(inst.medicine.time)} · ${statusText}</div></div>
+    </div>`;
+}
+function todaysDoseInstancesHtml(instances){
+  let html = '';
+  let lastLabel = null;
+  instances.forEach(inst=>{
+    const label = formatHHMM(inst.medicine.time);
+    if(label !== lastLabel){
+      html += `<div class="dose-time-header"><span>${label}</span></div>`;
+      lastLabel = label;
+    }
+    html += doseRowHtml(inst);
+  });
+  return html;
+}
+function renderTodayChecklist(){
+  const box = document.getElementById('medicines-today-list');
+  if(!box) return;
+  const instances = todaysDoseInstances();
+  box.innerHTML = instances.length ? todaysDoseInstancesHtml(instances) : '<p class="empty-hint">No medicines scheduled for today.</p>';
+}
+function renderMedicinesList(){
+  const box = document.getElementById('medicines-list');
+  if(!box) return;
+  if(!MEDICINES.length){
+    box.innerHTML = '<p class="empty-hint">No medicines yet.</p>';
+    return;
+  }
+  box.innerHTML = MEDICINES.map(m=>`
+    <div class="alarm-row" data-med-history="${m.id}" style="cursor:pointer;">
+      <div class="switch${m.enabled?' on':''}" style="pointer-events:none;"><div class="switch-knob"></div></div>
+      <div class="alarm-info"><div class="alarm-label">${escapeHtml(m.name)}${m.dose?` <span style="font-weight:400;color:var(--text-dim);">· ${escapeHtml(m.dose)}</span>`:''}</div><div class="alarm-sub">${repeatDaysText(m)} · ${formatHHMM(m.time)}</div></div>
+      <div class="alarm-edit" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>
+      </div>
+    </div>`).join('');
+}
+function applyMedicinesListCollapsed(){
+  const panel = document.getElementById('medicines-list');
+  const toggle = document.getElementById('medicines-list-toggle');
+  const chevron = document.getElementById('medicines-list-chevron');
+  if(!panel || !toggle) return;
+  panel.classList.toggle('collapsed', medicinesListCollapsed);
+  toggle.setAttribute('aria-expanded', medicinesListCollapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !medicinesListCollapsed);
+}
+
+/* ---------------------------------------------------------------------
+   Medicine history (day-by-day, per medicine — read-only)
+   --------------------------------------------------------------------- */
+let currentHistoryMedId = null, currentHistoryDate = null;
+
+function doseStatusForDate(medicine, dateTs){
+  const d = new Date(dateTs);
+  if(medicine.createdAt && startOfDay(dateTs) < startOfDay(medicine.createdAt)) return 'not-scheduled';
+  if(!matchesTodayMed(medicine, d)) return 'not-scheduled';
+
+  const dateKey = dateKeyForDate(d);
+  const entry = DOSELOG[doseKeyFor(medicine.id, dateKey, medicine.time)];
+  if(entry) return entry.status;
+
+  if(startOfDay(dateTs) < startOfDay(Date.now())) return 'missed';
+
+  const parts = (medicine.time||'').split(':').map(Number);
+  const h = parts[0], mi = parts[1];
+  const sched = new Date(d);
+  if(!isNaN(h)) sched.setHours(h, isNaN(mi)?0:mi, 0, 0);
+  return (Date.now() - sched.getTime()) >= 15*60*1000 ? 'overdue' : 'pending';
+}
+function openMedicineHistory(medId){
+  currentHistoryMedId = medId;
+  currentHistoryDate = startOfDay(Date.now());
+  renderMedicineHistoryDay();
+  document.getElementById('medicine-history').classList.add('show');
+}
+function closeMedicineHistory(){
+  document.getElementById('medicine-history').classList.remove('show');
+  currentHistoryMedId = null; currentHistoryDate = null;
+}
+function renderMedicineHistoryDay(){
+  if(!currentHistoryMedId) return;
+  const medicine = MEDICINES.find(m=>m.id===currentHistoryMedId);
+  if(!medicine){ closeMedicineHistory(); return; }
+
+  document.getElementById('medicine-history-name').textContent = medicine.name;
+  document.getElementById('medicine-history-dose').textContent = medicine.dose || '';
+  document.getElementById('medicine-history-day-label').textContent = dayNavLabel(currentHistoryDate);
+  const dateInput = document.getElementById('medicine-history-date-input');
+  dateInput.max = toDateInputValue(Date.now());
+  dateInput.value = toDateInputValue(currentHistoryDate);
+  document.getElementById('medicine-history-next-day').disabled = isToday(currentHistoryDate);
+
+  const status = doseStatusForDate(medicine, currentHistoryDate);
+  const labelMap = {
+    taken:'Taken', skipped:'Skipped', missed:'Missed — not marked',
+    pending:'Not yet due', overdue:'Overdue — not marked',
+    'not-scheduled': medicine.createdAt && startOfDay(currentHistoryDate) < startOfDay(medicine.createdAt)
+      ? "This medicine hadn't been added yet"
+      : 'Not scheduled this day'
+  };
+  const iconClass = status === 'taken' ? ' taken' : status === 'skipped' ? ' skipped' : (status === 'overdue' || status === 'missed') ? ' overdue' : '';
+  const iconSvg = status === 'taken' ? DOSE_CHECK_ICON : (status === 'skipped' || status === 'missed') ? DOSE_DASH_ICON : '';
+  const timeSub = status === 'not-scheduled' ? '' : formatHHMM(medicine.time);
+
+  document.getElementById('medicine-history-status-card').innerHTML = `
+    <div class="dose-row" style="border-bottom:none;">
+      <div class="dose-check${iconClass}" style="cursor:default;">${iconSvg}</div>
+      <div class="alarm-info"><div class="alarm-label">${escapeHtml(labelMap[status] || '')}</div><div class="alarm-sub">${timeSub}</div></div>
+    </div>`;
+}
+function shiftMedicineHistoryDay(deltaDays){
+  const d = new Date(currentHistoryDate);
+  d.setDate(d.getDate() + deltaDays);
+  if(startOfDay(d.getTime()) > startOfDay(Date.now())) return;
+  currentHistoryDate = startOfDay(d.getTime());
+  renderMedicineHistoryDay();
+}
+
+/* ---------------------------------------------------------------------
+   Tab navigation
+   --------------------------------------------------------------------- */
+let medicinesListCollapsed = true;
+
+function showPanel(name){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
+  if(name === 'medicines'){
+    // Matches the app: "All medicines" always starts collapsed on entering
+    // this tab, so the Today checklist is the first thing you see.
+    medicinesListCollapsed = true;
+    applyMedicinesListCollapsed();
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Page-wide state + data loading
+   --------------------------------------------------------------------- */
+let ENTRIES = [], CUSTOM_METRICS = {}, MEDICINES = [], DOSELOG = {};
+let trendRange = 7;
+
+function renderHomeGrid(){
   const types = allTypesInOrder(CUSTOM_METRICS);
-  document.getElementById('tiles').innerHTML = types.map(t => tileHtml(t, ENTRIES, CUSTOM_METRICS)).join('');
+  document.getElementById('home-grid').innerHTML = types.map(t => tileHtml(t, ENTRIES, CUSTOM_METRICS)).join('');
+}
+function renderTrendsPanel(){
+  document.getElementById('trend-range-toggle').textContent = `Last ${trendRange} days`;
   const dates = lastNDates(trendRange);
-  document.getElementById('trends').innerHTML = types.map(t => trendHtml(t, dates, trendRange, ENTRIES, CUSTOM_METRICS)).join('');
-  document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', Number(b.dataset.range) === trendRange));
+  const types = allTypesInOrder(CUSTOM_METRICS);
+  document.getElementById('trend-cards').innerHTML = types.map(t => trendHtml(t, dates, trendRange, ENTRIES, CUSTOM_METRICS)).join('');
+}
+function renderAll(){
+  renderHomeGrid();
+  renderTrendsPanel();
+  renderTodayChecklist();
+  renderMedicinesList();
+  applyMedicinesListCollapsed();
+  if(currentDetailType && document.getElementById('detail').classList.contains('show')){
+    openDetail(currentDetailType, currentDetailDate);
+  }
+  if(currentHistoryMedId && document.getElementById('medicine-history').classList.contains('show')){
+    renderMedicineHistoryDay();
+  }
 }
 
 async function loadData(){
-  const statusEl = document.getElementById('status');
+  const statusEl = document.getElementById('dash-status');
   statusEl.textContent = 'Refreshing…';
   statusEl.classList.remove('err');
   try{
@@ -338,54 +732,103 @@ async function loadData(){
       }
     });
 
-    render();
-    statusEl.textContent = 'Last updated ' + new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    try{
+      const medRows = await fetchTab(MEDICINES_TAB);
+      const map = {};
+      medRows.map(rowToMedicine).filter(Boolean).forEach(m=>{
+        const existing = map[m.id];
+        if(!existing || (m.updatedAt||0) >= (existing.updatedAt||0)) map[m.id] = m;
+      });
+      MEDICINES = Object.values(map).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+    } catch(e){
+      console.warn('Vitals dashboard: Medicines tab not read', e);
+      MEDICINES = [];
+    }
+
+    try{
+      const doseRows = await fetchTab(DOSELOG_TAB);
+      const map = {};
+      doseRows.map(rowToDoseLog).filter(Boolean).forEach(entry=>{
+        const existing = map[entry.id];
+        if(!existing || (entry.updatedAt||0) >= (existing.updatedAt||0)) map[entry.id] = entry;
+      });
+      DOSELOG = map;
+    } catch(e){
+      console.warn('Vitals dashboard: DoseLog tab not read', e);
+      DOSELOG = {};
+    }
+
+    renderAll();
+    statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
   } catch(err){
     console.error(err);
-    statusEl.textContent = 'Could not load data — the sheet may not be shared as "Anyone with the link can view," or the connection dropped. Will retry automatically.';
+    statusEl.textContent = 'Could not load data — the sheet may not be shared as "Anyone with the link can view," or the connection dropped. Retrying automatically.';
     statusEl.classList.add('err');
   }
 }
 
-function showDashboard(){
-  document.getElementById('lock').classList.add('hidden');
-  document.getElementById('dash').classList.remove('hidden');
-  loadData();
-  setInterval(loadData, REFRESH_MS);
-}
-
-function wireLock(){
-  const input = document.getElementById('passcode-input');
-  const btn = document.getElementById('passcode-submit');
-  const err = document.getElementById('passcode-err');
-  async function tryUnlock(){
-    const val = input.value.trim();
-    if(!val) return;
-    const hash = await sha256Hex(val);
-    if(hash === PASSCODE_HASH){
-      sessionStorage.setItem(UNLOCK_KEY, '1');
-      showDashboard();
-    } else {
-      err.textContent = 'Incorrect passcode';
-      input.value = '';
-      input.focus();
-    }
-  }
-  btn.addEventListener('click', tryUnlock);
-  input.addEventListener('keydown', e => { if(e.key === 'Enter') tryUnlock(); });
-}
-
-function wireControls(){
+/* ---------------------------------------------------------------------
+   Event wiring — every control left here is navigation, never input.
+   --------------------------------------------------------------------- */
+function wireEvents(){
+  document.querySelectorAll('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
   document.getElementById('refresh-btn').addEventListener('click', loadData);
-  document.querySelectorAll('.range-btn').forEach(b=>{
-    b.addEventListener('click', ()=>{ trendRange = Number(b.dataset.range); render(); });
+
+  document.getElementById('home-grid').addEventListener('click', (e)=>{
+    const card = e.target.closest('[data-open-detail]');
+    if(card) openDetail(card.dataset.openDetail);
+  });
+  document.getElementById('home-grid').addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('[data-open-detail]');
+    if(card){ e.preventDefault(); openDetail(card.dataset.openDetail); }
+  });
+
+  document.getElementById('trend-range-toggle').addEventListener('click', ()=>{
+    trendRange = trendRange === 7 ? 30 : 7;
+    renderTrendsPanel();
+  });
+
+  document.getElementById('detail-back').addEventListener('click', closeDetail);
+  document.getElementById('detail-prev-day').addEventListener('click', ()=> shiftDetailDay(-1));
+  document.getElementById('detail-next-day').addEventListener('click', ()=> shiftDetailDay(1));
+  document.getElementById('detail-calendar-btn').addEventListener('click', ()=>{
+    const input = document.getElementById('detail-date-input');
+    if(input.showPicker){ try{ input.showPicker(); } catch(e){ input.focus(); } }
+    else { input.focus(); input.click(); }
+  });
+  document.getElementById('detail-date-input').addEventListener('change', (e)=>{
+    if(!e.target.value) return;
+    openDetail(currentDetailType, new Date(e.target.value+'T00:00:00').getTime());
+  });
+
+  document.getElementById('medicines-list-toggle').addEventListener('click', ()=>{
+    medicinesListCollapsed = !medicinesListCollapsed;
+    applyMedicinesListCollapsed();
+  });
+  document.getElementById('medicines-list').addEventListener('click', (e)=>{
+    const row = e.target.closest('[data-med-history]');
+    if(row) openMedicineHistory(row.dataset.medHistory);
+  });
+  document.getElementById('medicine-history-back').addEventListener('click', closeMedicineHistory);
+  document.getElementById('medicine-history-prev-day').addEventListener('click', ()=> shiftMedicineHistoryDay(-1));
+  document.getElementById('medicine-history-next-day').addEventListener('click', ()=> shiftMedicineHistoryDay(1));
+  document.getElementById('medicine-history-calendar-btn').addEventListener('click', ()=>{
+    const input = document.getElementById('medicine-history-date-input');
+    if(input.showPicker){ try{ input.showPicker(); } catch(e){ input.focus(); } }
+    else { input.focus(); input.click(); }
+  });
+  document.getElementById('medicine-history-date-input').addEventListener('change', (e)=>{
+    if(!e.target.value) return;
+    const ts = new Date(e.target.value+'T00:00:00').getTime();
+    if(startOfDay(ts) > startOfDay(Date.now())) return;
+    currentHistoryDate = startOfDay(ts);
+    renderMedicineHistoryDay();
   });
 }
 
 document.addEventListener('DOMContentLoaded', ()=>{
-  wireLock();
-  wireControls();
-  if(sessionStorage.getItem(UNLOCK_KEY) === '1'){
-    showDashboard();
-  }
+  wireEvents();
+  loadData();
+  setInterval(loadData, REFRESH_MS);
 });

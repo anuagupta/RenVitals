@@ -345,8 +345,20 @@ function requestToken(promptMode){
       tokenClient.requestAccessToken({
 
         /*
-         * Empty prompt means:
-         * reuse the existing Google authorization if possible.
+         * 'none' — never show any Google screen at all. If the token can't
+         *   be renewed silently, this fails immediately instead of asking
+         *   the user anything. EVERY automatic renewal uses this, which is
+         *   what stops "it asks me to sign in every time I open the app":
+         *   browser access tokens only last about an hour and this flow
+         *   gets no refresh token, so re-authorization is needed often —
+         *   it just must never interrupt the user to do it.
+         *
+         * '' — let Google show its screens only if they're actually needed
+         *   (first-ever grant, or the silent path above has stopped
+         *   working). Used ONLY for an explicit "Connect" tap.
+         *
+         * Note 'consent' is deliberately not used anywhere: it re-shows the
+         * full consent screen even when access was already granted.
          */
         prompt:
           promptMode || ''
@@ -406,10 +418,12 @@ async function restoreAuthorizedSession(){
   try{
 
     /*
-     * Silent restoration.
-     * This should not show the Google consent screen again.
+     * Silent restoration — 'none' guarantees Google shows nothing at all.
+     * If it can't renew without asking, it throws and we simply drop to
+     * "Not connected" with a Connect button in Settings, rather than
+     * interrupting the user with a sign-in screen they didn't ask for.
      */
-    await requestToken('');
+    await requestToken('none');
 
     setState('connected');
 
@@ -510,7 +524,7 @@ async function ensureValidToken(){
    */
   try{
 
-    return await requestToken('');
+    return await requestToken('none');
 
   }catch(error){
 
@@ -545,10 +559,16 @@ async function signIn(){
   }
 
   /*
-   * This is the ONLY place a visible Google consent screen may be shown —
-   * it only runs when the user explicitly taps "Connect" in Settings.
-   * Nothing triggered by page load, refresh, visibility or connectivity
-   * changes is allowed to call requestToken('consent').
+   * This is the ONLY place a visible Google screen may be shown — it only
+   * runs when the user explicitly taps "Connect" in Settings. Nothing
+   * triggered by page load, unlock, refresh, visibility or connectivity
+   * changes is allowed to ask the user for anything; those all go through
+   * requestToken('none'), which shows nothing ever.
+   *
+   * '' rather than 'consent': 'consent' forces the full consent screen on
+   * every single tap even when access was already granted long ago, which
+   * made reconnecting far more tedious than it needed to be. With '',
+   * Google only shows a screen when it genuinely needs one.
    */
   setState('authenticating');
 
@@ -556,7 +576,7 @@ async function signIn(){
 
   try{
 
-    await requestToken('consent');
+    await requestToken('');
 
     setState('connected');
 
@@ -642,7 +662,7 @@ async function apiFetch(
     try{
 
       token =
-        await requestToken('');
+        await requestToken('none');
 
     }catch(renewError){
 

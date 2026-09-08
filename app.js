@@ -32,7 +32,7 @@ const DB = {
   getColorOverrides(){ return this._get('vitals:colorOverrides', {}); },
   saveColorOverrides(o){ this._set('vitals:colorOverrides', o); },
   getSettings(){ return this._get('vitals:settings', {
-    pinHash:null, pinSalt:null, theme:'auto', timeFormat:'12h', bioEnabled:false, bioCredId:null, onboarded:false
+    pinHash:null, pinSalt:null, theme:'dark', timeFormat:'12h', bioEnabled:false, bioCredId:null, onboarded:false
   }); },
   saveSettings(s){ this._set('vitals:settings', s); }
 };
@@ -413,6 +413,39 @@ function computeHomeAggregate(type){
   };
 }
 
+/*
+ * The seven-day shape of a parameter, drawn small enough to sit inside its
+ * Home tile. Returns '' when there aren't two days of data to join, so a
+ * new parameter shows a clean tile rather than a stray dot. Stroke width is
+ * pinned with non-scaling-stroke because the viewBox is stretched to the
+ * tile's width.
+ */
+function buildCardSpark(type, meta){
+  const dates = lastNDates(7);
+  const list = DB.getEntries().filter(e => e.type === type);
+  const isVolume = (type === 'liquid' || type === 'urine');
+  const daily = dailySeriesFor(type, dates, list);
+  const series = isVolume ? daily.map(v => v || null) : daily;
+
+  const idx = [];
+  series.forEach((v,i)=>{ if(v !== null && v !== undefined) idx.push(i); });
+  if(idx.length < 2) return '';
+
+  const present = idx.map(i => series[i]);
+  const min = Math.min(...present), max = Math.max(...present);
+  const range = (max - min) || 1;
+  const W = 118, H = 24, pad = 3;
+  const xs = idx.map(i => pad + (i / (series.length - 1)) * (W - pad*2));
+  const ys = present.map(v => (H - pad) - ((v - min) / range) * (H - pad*2));
+  const pts = xs.map((x,i) => [x, ys[i]]);
+  const last = pts[pts.length - 1];
+
+  return `<svg class="card-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`
+    + `<path${haloClass(meta.colorVar)} d="${pointsToPath(pts)}" fill="none" stroke="var(${meta.colorVar})" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
+    + `<circle${haloClass(meta.colorVar)} cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.2" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`
+    + `</svg>`;
+}
+
 function renderHomeGrid(){
   const grid = $('#home-grid');
   grid.innerHTML = allMetricTypes().map(type=>{
@@ -426,8 +459,9 @@ function renderHomeGrid(){
           <span class="card-plus" aria-hidden="true">+</span>
         </button>
         <button class="card-bottom" data-open-detail="${type}">
-          <div class="card-label">${meta.label}</div>
+          <div class="card-label">${escapeHtml(meta.label)}</div>
           <div class="card-value">${agg.valueHtml}</div>
+          ${buildCardSpark(type, meta)}
           <div class="card-time">${agg.timeText}</div>
         </button>
       </div>`;
@@ -1302,6 +1336,51 @@ function dailySeriesFor(type, dates, list){
     return day.length ? roundSmart(avg(day.map(e=>e.value)), 2) : null;
   });
 }
+/*
+ * How this parameter's average moved against the period immediately before
+ * the one on screen. Deliberately reports direction only, with the arrow in
+ * the parameter's own colour: whether a rise is good or bad is a clinical
+ * question this app has no business answering, so nothing here is coloured
+ * green or red. Returns '' unless both periods actually hold readings.
+ */
+function trendDeltaHtml(type, list, isVolume, meta){
+  const dayMs = 86400000;
+  const days = currentTrendRange;
+  const today = startOfDay(Date.now());
+  const curStart = today - (days - 1) * dayMs;
+  const prevStart = curStart - days * dayMs;
+
+  function periodAverage(from, to){
+    const inRange = list.filter(e => startOfDay(e.ts) >= from && startOfDay(e.ts) < to);
+    if(!inRange.length) return null;
+    if(isVolume){
+      // volumes compare as daily totals, not as individual entries
+      const byDay = {};
+      inRange.forEach(e => { const k = startOfDay(e.ts); byDay[k] = (byDay[k] || 0) + e.amount; });
+      return avg(Object.keys(byDay).map(k => byDay[k]));
+    }
+    const vals = inRange
+      .map(e => type === 'bp' ? e.systolic : e.value)
+      .filter(v => typeof v === 'number' && !isNaN(v));
+    return vals.length ? avg(vals) : null;
+  }
+
+  const current = periodAverage(curStart, today + dayMs);
+  const previous = periodAverage(prevStart, curStart);
+  if(current === null || previous === null) return '';
+
+  const diff = current - previous;
+  const pct = previous !== 0 ? (diff / previous) * 100 : 0;
+  if(Math.abs(pct) < 2) return '<span class="trend-delta flat">no change</span>';
+
+  // Always the absolute change, never a percentage: mixing the two made
+  // "▼ 7" (mmHg) and "▼ 12%" sit side by side meaning different things. The
+  // unit is already on the card's own reading directly above.
+  const arrow = diff > 0 ? '&#9650;' : '&#9660;';
+  const shown = roundSmart(Math.abs(diff), 2);
+  return `<span class="trend-delta"><span style="color:var(${meta.colorVar});">${arrow}</span> ${shown}</span>`;
+}
+
 function trendCardHtml(type, dates, allEntries){
   const meta = getMetricMeta(type);
   if(!meta) return '';
@@ -1333,7 +1412,10 @@ function trendCardHtml(type, dates, allEntries){
     <div class="trend-card" data-open-chart="${type}">
       <div class="trend-head">
         <span class="trend-name" style="color:var(${textSafeColorVar(meta)});">${escapeHtml(meta.label)}</span>
-        <span class="trend-range">${rangeText}</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span class="trend-range">${rangeText}</span>
+          ${trendDeltaHtml(type, list, isVolume, meta)}
+        </span>
       </div>
       <div class="trend-current">${currentHtml}</div>
       <svg class="spark" viewBox="0 0 300 64" preserveAspectRatio="none">${spark.svg}</svg>
@@ -1704,6 +1786,57 @@ function todaysDoseInstancesHtml(instances){
   });
   return html;
 }
+/*
+ * Today's dose progress, counted straight from the same instances the
+ * checklist below it renders from. Hidden entirely on a day with nothing
+ * scheduled, so the Medicines tab doesn't lead with an empty ring.
+ */
+function renderAdherence(){
+  const box = $('#medicines-adherence');
+  if(!box) return;
+  const instances = todaysDoseInstances();
+  if(!instances.length){ box.innerHTML = ''; return; }
+
+  const total = instances.length;
+  const taken = instances.filter(i => i.status === 'taken').length;
+  const skipped = instances.filter(i => i.status === 'skipped').length;
+  const outstanding = instances.filter(i => i.status === 'pending');
+
+  const radius = 18;
+  const circumference = 2 * Math.PI * radius;
+  const done = Math.min(1, (taken + skipped) / total);
+  const dash = (circumference * done).toFixed(1);
+
+  let headline, detail;
+  if(!outstanding.length){
+    headline = 'All marked';
+    detail = taken === total
+      ? `Every dose today is marked as taken.`
+      : `${taken} taken, ${skipped} skipped.`;
+  } else {
+    const next = outstanding[0];
+    headline = outstanding.length === 1 ? 'One dose left' : `${outstanding.length} doses left`;
+    const dose = next.medicine.dose ? `${next.medicine.name} ${next.medicine.dose}` : next.medicine.name;
+    detail = `Next: ${dose} at ${formatHHMM(next.medicine.time)}.`;
+  }
+
+  box.innerHTML = `
+    <div class="adherence">
+      <svg class="adherence-ring" viewBox="0 0 44 44" aria-label="${taken + skipped} of ${total} doses marked">
+        <circle cx="22" cy="22" r="${radius}" fill="none" stroke="var(--hairline-2)" stroke-width="5"/>
+        <circle cx="22" cy="22" r="${radius}" fill="none" stroke="var(--teal)" stroke-width="5"
+                stroke-linecap="round" stroke-dasharray="${dash} ${circumference.toFixed(1)}"
+                transform="rotate(-90 22 22)"/>
+        <text x="22" y="26" text-anchor="middle" fill="var(--text)" font-size="12"
+              font-family="var(--font-mono)">${taken + skipped}/${total}</text>
+      </svg>
+      <div class="adherence-text">
+        <div class="n">${escapeHtml(headline)}</div>
+        <div class="s">${escapeHtml(detail)}</div>
+      </div>
+    </div>`;
+}
+
 function renderTodayChecklist(){
   const box = $('#medicines-today-list');
   if(!box) return;
@@ -1711,6 +1844,7 @@ function renderTodayChecklist(){
   box.innerHTML = instances.length
     ? todaysDoseInstancesHtml(instances)
     : '<p class="empty-hint">No medicines scheduled for today.</p>';
+  renderAdherence();
 }
 function wireDoseChecklistDelegation(container){
   if(!container) return;

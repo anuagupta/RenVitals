@@ -8,17 +8,20 @@
 <meta name="robots" content="noindex, nofollow">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <!-- Same stylesheet the app itself uses — every class below (.card, .tabbar,
      .detail, .dose-row, …) is already styled there, so this page renders
      pixel-for-pixel like the app's own screens, light/dark theme included. -->
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=6">
 <style>
   /* The one thing this page needs that the app doesn't. */
   .readonly-badge{
     font-size:10.5px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;
     padding:3px 8px;border-radius:7px;background:var(--surface-2);color:var(--text-dim);
     align-self:center;
+  }
+  .dash-status{
+    font-size:11.5px;color:var(--text-dim);margin:5px 0 0;line-height:1.45;
   }
   #dash-status.err{color:var(--danger);}
 </style>
@@ -32,7 +35,7 @@
     <div class="header-row">
       <div>
         <p class="greeting">Vitals</p>
-        <p class="date" id="dash-status">Loading…</p>
+        <p class="dash-status" id="dash-status">Loading…</p>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
         <span class="readonly-badge">Read only</span>
@@ -159,6 +162,6 @@
 
 </div>
 
-<script src="dashboard.js"></script>
+<script src="dashboard.js?v=2"></script>
 </body>
 </html>

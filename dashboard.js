@@ -233,6 +233,34 @@ function pointsToPath(points){ return 'M' + points.map(p => p[0].toFixed(1)+','+
 /* ---------------------------------------------------------------------
    Tiles (Home-screen equivalent — today's summary per parameter)
    --------------------------------------------------------------------- */
+/* The same seven-day tile sparkline the app draws, so both surfaces read
+   as one product. Returns '' below two days of data. */
+function cardSparkHtml(type, entries, meta){
+  const dates = lastNDates(7);
+  const list = entries.filter(e => e.type === type);
+  const isVolume = (type === 'liquid' || type === 'urine');
+  const daily = dailySeriesFor(type, dates, list);
+  const series = isVolume ? daily.map(v => v || null) : daily;
+
+  const idx = [];
+  series.forEach((v,i)=>{ if(v !== null && v !== undefined) idx.push(i); });
+  if(idx.length < 2) return '';
+
+  const present = idx.map(i => series[i]);
+  const min = Math.min(...present), max = Math.max(...present);
+  const range = (max - min) || 1;
+  const W = 118, H = 24, pad = 3;
+  const xs = idx.map(i => pad + (i / (series.length - 1)) * (W - pad*2));
+  const ys = present.map(v => (H - pad) - ((v - min) / range) * (H - pad*2));
+  const pts = xs.map((x,i) => [x, ys[i]]);
+  const last = pts[pts.length - 1];
+
+  return `<svg class="card-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`
+    + `<path${haloClass(meta.colorVar)} d="${pointsToPath(pts)}" fill="none" stroke="var(${meta.colorVar})" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
+    + `<circle${haloClass(meta.colorVar)} cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.2" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`
+    + `</svg>`;
+}
+
 function tileHtml(type, entries, customMetrics){
   const meta = getMetricMeta(type, customMetrics);
   if(!meta) return '';
@@ -265,6 +293,7 @@ function tileHtml(type, entries, customMetrics){
       <div class="card-bottom">
         <div class="card-label">${escapeHtml(meta.label)}</div>
         <div class="card-value">${valueHtml}</div>
+        ${cardSparkHtml(type, entries, meta)}
         <div class="card-time">${subHtml}</div>
       </div>
     </div>`;

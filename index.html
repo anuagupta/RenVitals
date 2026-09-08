@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Vitals</title>
 <meta name="description" content="A private, offline-first health log for fluid intake, urine output, blood pressure, sugar, and a medicine adherence checklist.">
-<meta name="theme-color" content="#F6F5F2" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#14151A" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F2F3F6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0A0B0F" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.json?v=3">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=2">
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=2">
@@ -15,14 +15,14 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <!-- The ?v= on styles.css/app.js/drive.js below forces phones and GitHub's
      CDN to fetch the new file on the next deploy instead of quietly
      reusing an old cached copy. Bump every one of these numbers (and
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
 
@@ -51,8 +51,8 @@
   <div class="app-header">
     <div class="header-row">
       <div>
-        <p class="greeting" id="greeting">Hello</p>
         <p class="date" id="today-date">—</p>
+        <p class="greeting" id="greeting">Hello</p>
       </div>
       <div style="display:flex;gap:8px;">
         <button class="theme-toggle" id="lock-now-btn" aria-label="Lock now">
@@ -86,7 +86,8 @@
 
     <!-- ============ MEDICINES PANEL ============ -->
     <section class="panel" id="panel-medicines">
-      <div class="section-title" style="margin-top:4px;">Today</div>
+      <div id="medicines-adherence"><!-- rendered by app.js --></div>
+      <div class="section-title">Today</div>
       <div class="trend-card glass-card" id="medicines-today-list" style="padding:4px 16px;">
         <p class="empty-hint">No medicines scheduled for today.</p>
       </div>
@@ -350,6 +351,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="drive.js?v=3"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

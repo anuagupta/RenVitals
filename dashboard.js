@@ -231,34 +231,86 @@ function roundSmart(v, digits){
 function pointsToPath(points){ return 'M' + points.map(p => p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L'); }
 
 /* ---------------------------------------------------------------------
-   Tiles (Home-screen equivalent — today's summary per parameter)
+   Charts — shared math behind every drawn series in this file: one point
+   per calendar day (dailySeriesFor already sums volumes / averages
+   everything else), chronologically spaced so a gap in readings shows as
+   real empty space rather than compressed dots. Used at two sizes: the
+   small unlabeled Home tile chart, and the labeled Trends chart.
    --------------------------------------------------------------------- */
-/* The same seven-day tile sparkline the app draws, so both surfaces read
-   as one product. Returns '' below two days of data. */
-function cardSparkHtml(type, entries, meta){
-  const dates = lastNDates(7);
-  const list = entries.filter(e => e.type === type);
+function buildDailySeriesChart(type, dates, list, meta, opts){
   const isVolume = (type === 'liquid' || type === 'urine');
   const daily = dailySeriesFor(type, dates, list);
   const series = isVolume ? daily.map(v => v || null) : daily;
+  const n = series.length;
 
-  const idx = [];
-  series.forEach((v,i)=>{ if(v !== null && v !== undefined) idx.push(i); });
-  if(idx.length < 2) return '';
+  const presentIdx = [];
+  series.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
 
-  const present = idx.map(i => series[i]);
+  const {
+    W, H, padL = 14, padR = 14, padT = 16, padB = 16,
+    pointRadius = 4, strokeWidth = 2.5,
+    showValueLabels = false, showDateLabels = false,
+    minValueLabelGap = 26, emptyMsg = 'No data yet'
+  } = opts;
+
+  if(!presentIdx.length){
+    return `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--text-dim-2)" font-size="11" font-family="var(--font-body)">${escapeHtml(emptyMsg)}</text>`;
+  }
+
+  const present = presentIdx.map(i => series[i]);
   const min = Math.min(...present), max = Math.max(...present);
   const range = (max - min) || 1;
-  const W = 118, H = 24, pad = 3;
-  const xs = idx.map(i => pad + (i / (series.length - 1)) * (W - pad*2));
-  const ys = present.map(v => (H - pad) - ((v - min) / range) * (H - pad*2));
+  const xForIdx = i => n <= 1 ? (padL + W - padR) / 2 : padL + (i * ((W - padL - padR) / (n - 1)));
+  const xs = presentIdx.map(xForIdx);
+  const ys = present.map(v => (H - padB) - ((v - min) / range) * (H - padT - padB));
   const pts = xs.map((x,i) => [x, ys[i]]);
-  const last = pts[pts.length - 1];
 
-  return `<svg class="card-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`
-    + `<path${haloClass(meta.colorVar)} d="${pointsToPath(pts)}" fill="none" stroke="var(${meta.colorVar})" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
-    + `<circle${haloClass(meta.colorVar)} cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.2" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`
-    + `</svg>`;
+  let out = '';
+  if(pts.length > 1){
+    const pathD = pointsToPath(pts);
+    const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},${H-padB} L${xs[0].toFixed(1)},${H-padB} Z`;
+    out += `<path d="${areaD}" fill="var(${meta.colorVar})" opacity="0.09"/>`;
+    out += `<path${haloClass(meta.colorVar)} d="${pathD}" fill="none" stroke="var(${meta.colorVar})" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  pts.forEach(p => out += `<circle${haloClass(meta.colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${pointRadius}" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`);
+
+  if(showValueLabels){
+    // Skip a label that would land on top of the previous one — a flat
+    // series or a busy 30-day range would otherwise stack illegible text
+    // on itself. The most recent reading is exempted from thinning.
+    let lastLabelX = -Infinity;
+    const lastIdx = pts.length - 1;
+    pts.forEach((p,xIdx) => {
+      if(xIdx !== lastIdx && (p[0] - lastLabelX) < minValueLabelGap) return;
+      lastLabelX = p[0];
+      const val = present[xIdx];
+      const label = isVolume ? val.toLocaleString() : String(val);
+      const ly = Math.max(11, p[1] - (pointRadius + 7));
+      out += `<text x="${p[0].toFixed(1)}" y="${ly.toFixed(1)}" class="point-label" text-anchor="middle">${escapeHtml(label)}</text>`;
+    });
+  }
+  if(showDateLabels){
+    const labelEvery = n > 12 ? Math.ceil(n/8) : 1;
+    const lastPresent = presentIdx[presentIdx.length-1];
+    presentIdx.forEach((i, xIdx) => {
+      if(i % labelEvery !== 0 && i !== lastPresent) return;
+      const label = dates[i].toLocaleDateString([], {day:'numeric', month:'short'});
+      out += `<text x="${xs[xIdx].toFixed(1)}" y="${H-4}" class="time-label" text-anchor="middle">${escapeHtml(label)}</text>`;
+    });
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------------
+   Tiles (Home-screen equivalent — today's summary per parameter)
+   --------------------------------------------------------------------- */
+function cardSparkHtml(type, entries, meta){
+  const dates = lastNDates(7);
+  const list = entries.filter(e => e.type === type);
+  const chart = buildDailySeriesChart(type, dates, list, meta, {
+    W:300, H:64, padL:6, padR:6, padT:9, padB:9, pointRadius:3, strokeWidth:2
+  });
+  return `<svg class="card-chart" viewBox="0 0 300 64" aria-hidden="true">${chart}</svg>`;
 }
 
 function tileHtml(type, entries, customMetrics){
@@ -286,17 +338,15 @@ function tileHtml(type, entries, customMetrics){
   }
 
   return `
-    <div class="card ${meta.colorClass}" data-open-detail="${type}" role="button" tabindex="0" style="cursor:pointer;">
-      <div class="card-top">
-        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${meta.icon}</svg></div>
+    <button class="card ${meta.colorClass}" data-open-detail="${type}">
+      <div class="card-head">
+        <span class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${meta.icon}</svg></span>
+        <span class="card-label">${escapeHtml(meta.label)}</span>
+        <span class="card-value">${valueHtml}</span>
       </div>
-      <div class="card-bottom">
-        <div class="card-label">${escapeHtml(meta.label)}</div>
-        <div class="card-value">${valueHtml}</div>
-        ${cardSparkHtml(type, entries, meta)}
-        <div class="card-time">${subHtml}</div>
-      </div>
-    </div>`;
+      ${cardSparkHtml(type, entries, meta)}
+      <div class="card-time">${subHtml}</div>
+    </button>`;
 }
 
 /* ---------------------------------------------------------------------
@@ -317,34 +367,17 @@ function dailySeriesFor(type, dates, list){
     return day.length ? roundSmart(avg(day.map(e=>e.value)), 2) : null;
   });
 }
-function buildSparkline(values, colorVar){
-  const n = values.length;
-  const presentIdx = [];
-  values.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
-  if(!presentIdx.length) return '<text x="150" y="34" text-anchor="middle" fill="var(--text-dim)" font-size="12" font-family="var(--font-body)">No data yet</text>';
-  const present = presentIdx.map(i=>values[i]);
-  const xs = n<=1 ? presentIdx.map(()=>150) : presentIdx.map(i => i*(300/(n-1)));
-  const min = Math.min(...present), max = Math.max(...present);
-  const range = (max-min) || 1;
-  const ys = present.map(v => 56 - ((v-min)/range)*48 - 4);
-  const pts = xs.map((x,i)=> [x, ys[i]]);
-  let svg = '';
-  if(pts.length > 1){
-    const pathD = pointsToPath(pts);
-    const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},64 L${xs[0].toFixed(1)},64 Z`;
-    svg += `<path${haloClass(colorVar)} d="${pathD}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
-    svg += `<path d="${areaD}" fill="var(${colorVar})" opacity="0.08"/>`;
-  }
-  pts.forEach(p=> svg += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
-  return svg;
-}
 function trendHtml(type, dates, rangeDays, entries, customMetrics){
   const meta = getMetricMeta(type, customMetrics);
   if(!meta) return '';
   const list = entries.filter(e=>e.type===type);
   const isVolume = (type==='liquid' || type==='urine');
   const daily = dailySeriesFor(type, dates, list);
-  const spark = buildSparkline(isVolume ? daily.map(v=>v||null) : daily, meta.colorVar);
+  const chart = buildDailySeriesChart(type, dates, list, meta, {
+    W:300, H:126, padL:14, padR:14, padT:24, padB:22,
+    pointRadius:3.6, strokeWidth:2.3, showValueLabels:true, showDateLabels:true,
+    minValueLabelGap:30, emptyMsg:'No data in this range'
+  });
   const present = isVolume ? daily.filter(v=>v>0) : daily.filter(v=>v!==null);
   const latest = list.slice().sort((a,b)=>b.ts-a.ts)[0];
 
@@ -372,7 +405,7 @@ function trendHtml(type, dates, rangeDays, entries, customMetrics){
         <span class="trend-range">${rangeText}</span>
       </div>
       <div class="trend-current">${currentHtml}</div>
-      <svg class="spark" viewBox="0 0 300 64" preserveAspectRatio="none">${spark}</svg>
+      <svg class="trend-chart" viewBox="0 0 300 126" preserveAspectRatio="none">${chart}</svg>
     </div>`;
 }
 
@@ -806,11 +839,6 @@ function wireEvents(){
   document.getElementById('home-grid').addEventListener('click', (e)=>{
     const card = e.target.closest('[data-open-detail]');
     if(card) openDetail(card.dataset.openDetail);
-  });
-  document.getElementById('home-grid').addEventListener('keydown', (e)=>{
-    if(e.key !== 'Enter' && e.key !== ' ') return;
-    const card = e.target.closest('[data-open-detail]');
-    if(card){ e.preventDefault(); openDetail(card.dataset.openDetail); }
   });
 
   document.getElementById('trend-range-toggle').addEventListener('click', ()=>{

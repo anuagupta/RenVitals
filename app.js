@@ -414,36 +414,94 @@ function computeHomeAggregate(type){
 }
 
 /*
- * The seven-day shape of a parameter, drawn small enough to sit inside its
- * Home tile. Returns '' when there aren't two days of data to join, so a
- * new parameter shows a clean tile rather than a stray dot. Stroke width is
- * pinned with non-scaling-stroke because the viewBox is stretched to the
- * tile's width.
+ * Draws one point per calendar day for `type` across `dates` — the shared
+ * math behind every chart in this app (the Home tile's small preview, each
+ * Trends card, and the full-screen pinch-zoom expand), so all three agree
+ * on what "the value for a day" means: the day's total for a volume
+ * (liquid/urine) and the day's average otherwise (BP uses systolic; see
+ * dailySeriesFor). A day with no reading gets no point, but its slot in
+ * `dates` still occupies real x-axis space — that's what keeps readings
+ * taken more than a day apart honestly spaced instead of bunched together.
+ */
+function buildDailySeriesChart(type, dates, list, meta, opts){
+  const isVolume = (type === 'liquid' || type === 'urine');
+  const daily = dailySeriesFor(type, dates, list);
+  const series = isVolume ? daily.map(v => v || null) : daily;
+  const n = series.length;
+
+  const presentIdx = [];
+  series.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
+
+  const {
+    W, H, padL = 14, padR = 14, padT = 16, padB = 16,
+    pointRadius = 4, strokeWidth = 2.5,
+    showValueLabels = false, showDateLabels = false,
+    minValueLabelGap = 26, emptyMsg = 'No data yet'
+  } = opts;
+
+  if(!presentIdx.length){
+    return `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--text-dim-2)" font-size="11" font-family="var(--font-body)">${escapeHtml(emptyMsg)}</text>`;
+  }
+
+  const present = presentIdx.map(i => series[i]);
+  const min = Math.min(...present), max = Math.max(...present);
+  const range = (max - min) || 1;
+  const xForIdx = i => n <= 1 ? (padL + W - padR) / 2 : padL + (i * ((W - padL - padR) / (n - 1)));
+  const xs = presentIdx.map(xForIdx);
+  const ys = present.map(v => (H - padB) - ((v - min) / range) * (H - padT - padB));
+  const pts = xs.map((x,i) => [x, ys[i]]);
+
+  let out = '';
+  if(pts.length > 1){
+    const pathD = pointsToPath(pts);
+    const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},${H-padB} L${xs[0].toFixed(1)},${H-padB} Z`;
+    out += `<path d="${areaD}" fill="var(${meta.colorVar})" opacity="0.09"/>`;
+    out += `<path${haloClass(meta.colorVar)} d="${pathD}" fill="none" stroke="var(${meta.colorVar})" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  pts.forEach(p => out += `<circle${haloClass(meta.colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${pointRadius}" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`);
+
+  if(showValueLabels){
+    // Skip a label that would land on top of the previous one — a flat
+    // series (a week of identical daily totals) or a busy 30-day range
+    // would otherwise stack illegible text on itself. The most recent
+    // reading is exempted, so today's value is never the one hidden.
+    let lastLabelX = -Infinity;
+    const lastIdx = pts.length - 1;
+    pts.forEach((p,xIdx) => {
+      if(xIdx !== lastIdx && (p[0] - lastLabelX) < minValueLabelGap) return;
+      lastLabelX = p[0];
+      const val = present[xIdx];
+      const label = isVolume ? val.toLocaleString() : String(val);
+      const ly = Math.max(11, p[1] - (pointRadius + 7));
+      out += `<text x="${p[0].toFixed(1)}" y="${ly.toFixed(1)}" class="point-label" text-anchor="middle">${escapeHtml(label)}</text>`;
+    });
+  }
+  if(showDateLabels){
+    // Thin the x-axis labels on a busy range so they don't collide — the
+    // data points themselves are never thinned, only their date captions.
+    const labelEvery = n > 12 ? Math.ceil(n/8) : 1;
+    const lastPresent = presentIdx[presentIdx.length-1];
+    presentIdx.forEach((i, xIdx) => {
+      if(i % labelEvery !== 0 && i !== lastPresent) return;
+      const label = dates[i].toLocaleDateString([], {day:'numeric', month:'short'});
+      out += `<text x="${xs[xIdx].toFixed(1)}" y="${H-4}" class="time-label" text-anchor="middle">${escapeHtml(label)}</text>`;
+    });
+  }
+  return out;
+}
+
+/*
+ * The seven-day shape of a parameter, drawn small and unlabeled for its
+ * Home tile — a glance, not a reading. The full labeled version lives in
+ * Trends.
  */
 function buildCardSpark(type, meta){
   const dates = lastNDates(7);
   const list = DB.getEntries().filter(e => e.type === type);
-  const isVolume = (type === 'liquid' || type === 'urine');
-  const daily = dailySeriesFor(type, dates, list);
-  const series = isVolume ? daily.map(v => v || null) : daily;
-
-  const idx = [];
-  series.forEach((v,i)=>{ if(v !== null && v !== undefined) idx.push(i); });
-  if(idx.length < 2) return '';
-
-  const present = idx.map(i => series[i]);
-  const min = Math.min(...present), max = Math.max(...present);
-  const range = (max - min) || 1;
-  const W = 118, H = 24, pad = 3;
-  const xs = idx.map(i => pad + (i / (series.length - 1)) * (W - pad*2));
-  const ys = present.map(v => (H - pad) - ((v - min) / range) * (H - pad*2));
-  const pts = xs.map((x,i) => [x, ys[i]]);
-  const last = pts[pts.length - 1];
-
-  return `<svg class="card-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`
-    + `<path${haloClass(meta.colorVar)} d="${pointsToPath(pts)}" fill="none" stroke="var(${meta.colorVar})" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`
-    + `<circle${haloClass(meta.colorVar)} cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.2" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`
-    + `</svg>`;
+  const chart = buildDailySeriesChart(type, dates, list, meta, {
+    W:300, H:64, padL:6, padR:6, padT:9, padB:9, pointRadius:3, strokeWidth:2
+  });
+  return `<svg class="card-chart" viewBox="0 0 300 64" aria-hidden="true">${chart}</svg>`;
 }
 
 function renderHomeGrid(){
@@ -453,18 +511,15 @@ function renderHomeGrid(){
     if(!meta) return '';
     const agg = computeHomeAggregate(type);
     return `
-      <div class="card ${meta.colorClass}">
-        <button class="card-top" data-open-sheet="${type}">
-          <div class="card-icon">${meta.icon}</div>
-          <span class="card-plus" aria-hidden="true">+</span>
-        </button>
-        <button class="card-bottom" data-open-detail="${type}">
-          <div class="card-label">${escapeHtml(meta.label)}</div>
-          <div class="card-value">${agg.valueHtml}</div>
-          ${buildCardSpark(type, meta)}
-          <div class="card-time">${agg.timeText}</div>
-        </button>
-      </div>`;
+      <button class="card ${meta.colorClass}" data-open-detail="${type}">
+        <div class="card-head">
+          <span class="card-icon">${meta.icon}</span>
+          <span class="card-label">${escapeHtml(meta.label)}</span>
+          <span class="card-value">${agg.valueHtml}</span>
+        </div>
+        ${buildCardSpark(type, meta)}
+        <div class="card-time">${agg.timeText}</div>
+      </button>`;
   }).join('');
 }
 
@@ -679,6 +734,14 @@ function initTimeWheelPickers(root){
    ADD / EDIT SHEET
    ========================================================================= */
 function fieldsHtmlFor(kind, existing){
+  if(kind === 'picker'){
+    return `<div class="chips" id="log-picker-chips">${allMetricTypes().map(type=>{
+      const meta = getMetricMeta(type);
+      if(!meta) return '';
+      return `<div class="chip" data-pick-type="${type}"><span class="color-dot" style="background:var(${meta.colorVar});"></span>${escapeHtml(meta.label)}</div>`;
+    }).join('')}</div>`;
+  }
+
   if(kind === 'medicine'){
     const timeVal = existing ? existing.time : nextRoundHour();
     const days = existing ? existing.days : 'daily';
@@ -782,6 +845,7 @@ function openSheet(kind, editId){
   currentEditId = editId || null;
   const isMedicine = kind === 'medicine';
   const isNewMetric = kind === 'new-metric';
+  const isPicker = kind === 'picker';
   const isEdit = !!currentEditId;
 
   let existing = null;
@@ -791,20 +855,23 @@ function openSheet(kind, editId){
       : DB.getEntries().find(e=>e.id===currentEditId);
   }
 
-  const meta = isNewMetric ? null : getMetricMeta(kind);
+  const meta = (isNewMetric || isPicker) ? null : getMetricMeta(kind);
   $('#sheet-title').textContent = isMedicine
     ? (isEdit ? 'Edit medicine' : 'New medicine')
     : isNewMetric
       ? (isEdit ? 'Edit health parameter' : 'New health parameter')
-      : (isEdit ? `Edit ${meta.sheetNoun}` : `Log ${meta.sheetNoun}`);
+      : isPicker
+        ? 'Log a reading'
+        : (isEdit ? `Edit ${meta.sheetNoun}` : `Log ${meta.sheetNoun}`);
   $('#sheet-sub').textContent = isMedicine ? 'Repeats on the days and times you choose'
     : isNewMetric ? 'Shows up as its own card on Home and Trends'
+    : isPicker ? 'Choose what you’re logging'
     : ('Now · ' + formatTime(Date.now()));
   $('#sheet-fields').innerHTML = fieldsHtmlFor(kind, existing);
   initTimeWheelPickers($('#sheet-fields'));
 
   const noteLabel = $('#note-field-label'), noteInput = $('#sheet-note');
-  if(isMedicine || isNewMetric){
+  if(isMedicine || isNewMetric || isPicker){
     noteLabel.style.display = 'none'; noteInput.style.display = 'none';
   } else {
     noteLabel.style.display = ''; noteInput.style.display = '';
@@ -812,12 +879,19 @@ function openSheet(kind, editId){
   }
 
   $('#sheet-delete-btn').style.display = isEdit ? '' : 'none';
+  // The picker isn't a form to submit — tapping a parameter chip transitions
+  // straight into that parameter's own fields (see wireSheetFieldsDelegation),
+  // so there's nothing for a Save button to do here.
+  $('#sheet-save-btn').style.display = isPicker ? 'none' : '';
   $('#sheet-save-btn').textContent = isMedicine ? (isEdit ? 'Save medicine' : 'Add medicine') : 'Done';
 
   attachCustomAmountSync();
 
   $('#scrim').classList.add('show');
   $('#sheet').classList.add('show');
+}
+function openLogPicker(){
+  openSheet('picker');
 }
 function closeSheet(){
   $('#scrim').classList.remove('show');
@@ -837,6 +911,11 @@ function wireSheetFieldsDelegation(){
   $('#sheet-fields').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if(!chip) return;
+
+    if(chip.dataset.pickType !== undefined){
+      openSheet(chip.dataset.pickType);
+      return;
+    }
 
     if(chip.dataset.day !== undefined){
       chip.classList.toggle('selected');
@@ -1296,31 +1375,6 @@ function closeDetail(){
 /* =========================================================================
    TRENDS
    ========================================================================= */
-function buildSparkline(values, colorVar){
-  const n = values.length;
-  const presentIdx = [];
-  values.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
-  if(!presentIdx.length) return {svg: emptyChartSvg64('No data yet'), current:'—'};
-  const present = presentIdx.map(i=>values[i]);
-  const xs = n<=1 ? presentIdx.map(()=>150) : presentIdx.map(i => i*(300/(n-1)));
-  const min = Math.min(...present), max = Math.max(...present);
-  const range = (max-min) || 1;
-  const ys = present.map(v => 56 - ((v-min)/range)*48 - 4);
-  const pts = xs.map((x,i)=> [x, ys[i]]);
-  let svg = '';
-  if(pts.length > 1){
-    const pathD = pointsToPath(pts);
-    const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},64 L${xs[0].toFixed(1)},64 Z`;
-    svg += `<path${haloClass(colorVar)} d="${pathD}" fill="none" stroke="var(${colorVar})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`;
-    svg += `<path d="${areaD}" fill="var(${colorVar})" opacity="0.08"/>`;
-  }
-  pts.forEach(p=> svg += `<circle${haloClass(colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4" fill="var(${colorVar})"${haloRing(colorVar)}/>`);
-  return {svg, current: present[present.length-1]};
-}
-function emptyChartSvg64(msg){
-  return `<text x="150" y="34" text-anchor="middle" fill="var(--text-dim)" font-size="12" font-family="var(--font-body)">${escapeHtml(msg)}</text>`;
-}
-
 function dailySeriesFor(type, dates, list){
   if(type==='liquid' || type==='urine'){
     return dates.map(d => list.filter(e=>sameDay(e.ts,d)).reduce((s,e)=>s+e.amount,0));
@@ -1387,7 +1441,11 @@ function trendCardHtml(type, dates, allEntries){
   const list = allEntries.filter(e=>e.type===type);
   const isVolume = (type==='liquid' || type==='urine');
   const daily = dailySeriesFor(type, dates, list);
-  const spark = buildSparkline(isVolume ? daily.map(v=>v||null) : daily, meta.colorVar);
+  const chart = buildDailySeriesChart(type, dates, list, meta, {
+    W:300, H:126, padL:14, padR:14, padT:24, padB:22,
+    pointRadius:3.6, strokeWidth:2.3, showValueLabels:true, showDateLabels:true,
+    minValueLabelGap:30, emptyMsg:'No data in this range'
+  });
   const present = isVolume ? daily.filter(v=>v>0) : daily.filter(v=>v!==null);
   const latest = list.slice().sort((a,b)=>b.ts-a.ts)[0];
   const dim = 'font-size:13px;color:var(--text-dim);font-family:var(--font-body);';
@@ -1418,7 +1476,7 @@ function trendCardHtml(type, dates, allEntries){
         </span>
       </div>
       <div class="trend-current">${currentHtml}</div>
-      <svg class="spark" viewBox="0 0 300 64" preserveAspectRatio="none">${spark.svg}</svg>
+      <svg class="trend-chart" viewBox="0 0 300 126" preserveAspectRatio="none">${chart}</svg>
     </div>`;
 }
 function renderTrends(){
@@ -1436,59 +1494,13 @@ function buildExpandedChartSvg(type, rangeDays){
   if(!meta) return '';
   const dates = lastNDates(rangeDays || currentTrendRange);
   const list = DB.getEntries().filter(e=>e.type===type);
-  const isVolume = (type==='liquid' || type==='urine');
-  const daily = dailySeriesFor(type, dates, list);
-  const series = isVolume ? daily.map(v=>v||null) : daily;
-
-  const n = series.length;
-  const presentIdx = [];
-  series.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
-
-  // padT is taller than the plain date-axis version of this chart to leave
-  // headroom for the per-point value labels drawn above each dot below.
-  const W = 640, H = 260, padL = 16, padR = 16, padT = 28, padB = 30;
-
-  if(!presentIdx.length){
-    return `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--text-dim)" font-size="14" font-family="var(--font-body)">No data in this range</text>`;
-  }
-
-  const present = presentIdx.map(i=>series[i]);
-  const min = Math.min(...present), max = Math.max(...present);
-  const range = (max-min) || 1;
-  const xForIdx = i => n<=1 ? (padL+W-padR)/2 : padL + (i * ((W-padL-padR)/(n-1)));
-  const xs = presentIdx.map(xForIdx);
-  const ys = present.map(v => (H-padB) - ((v-min)/range)*(H-padT-padB));
-  const pts = xs.map((x,i)=>[x, ys[i]]);
-
-  let out = '';
-  if(pts.length > 1){
-    const pathD = pointsToPath(pts);
-    const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},${H-padB} L${xs[0].toFixed(1)},${H-padB} Z`;
-    out += `<path${haloClass(meta.colorVar)} d="${pathD}" fill="none" stroke="var(${meta.colorVar})" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
-    out += `<path d="${areaD}" fill="var(${meta.colorVar})" opacity="0.10"/>`;
-  }
-  pts.forEach(p=> out += `<circle${haloClass(meta.colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="5" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`);
-
-  // The value for each plotted day, right above its dot — the point of the
-  // full-screen expand is to actually read numbers off the chart, not just
-  // see its shape. Pinch/scroll zoom (already built into this view) is what
-  // keeps this legible on a busy 30-day range instead of thinning labels out.
-  pts.forEach((p,xIdx)=>{
-    const val = present[xIdx];
-    const label = isVolume ? val.toLocaleString() : String(val);
-    const ly = Math.max(12, p[1] - 12);
-    out += `<text x="${p[0].toFixed(1)}" y="${ly.toFixed(1)}" class="point-label" text-anchor="middle">${escapeHtml(label)}</text>`;
+  return buildDailySeriesChart(type, dates, list, meta, {
+    // padT is taller than the trend-card version of this chart to leave
+    // headroom for the per-point value labels drawn above each dot.
+    W:640, H:260, padL:16, padR:16, padT:28, padB:30,
+    pointRadius:5, strokeWidth:3, showValueLabels:true, showDateLabels:true,
+    minValueLabelGap:48, emptyMsg:'No data in this range'
   });
-
-  const labelEvery = n > 12 ? Math.ceil(n/8) : 1;
-  const lastPresent = presentIdx[presentIdx.length-1];
-  presentIdx.forEach((i, xIdx)=>{
-    if(i % labelEvery !== 0 && i !== lastPresent) return;
-    const label = dates[i].toLocaleDateString([], {day:'numeric', month:'short'});
-    out += `<text x="${xs[xIdx].toFixed(1)}" y="${H-10}" class="time-label" text-anchor="middle">${escapeHtml(label)}</text>`;
-  });
-
-  return out;
 }
 
 function openChartExpand(type){
@@ -2493,10 +2505,9 @@ function wireEvents(){
   $('#settings-btn').addEventListener('click', ()=> showPanel('settings'));
 
   $all('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
+  $('#home-fab').addEventListener('click', openLogPicker);
 
   $('#home-grid').addEventListener('click', (e)=>{
-    const openSheetBtn = e.target.closest('[data-open-sheet]');
-    if(openSheetBtn){ openSheet(openSheetBtn.dataset.openSheet); return; }
     const openDetailBtn = e.target.closest('[data-open-detail]');
     if(openDetailBtn){ openDetail(openDetailBtn.dataset.openDetail); }
   });

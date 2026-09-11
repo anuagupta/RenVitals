@@ -7,12 +7,12 @@
 // deploy that touches app.js/drive.js/styles.css — mismatched versions
 // (fresh markup, stale cached script) is how a new button can appear but
 // silently do nothing.
-const CACHE_NAME = 'vitals-cache-v12';
+const CACHE_NAME = 'vitals-cache-v13';
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css?v=8',
-  './app.js?v=10',
+  './app.js?v=11',
   './drive.js?v=3',
   './manifest.json',
   './icons/icon-192.png',

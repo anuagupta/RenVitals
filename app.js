@@ -497,12 +497,12 @@ function renderHomeGrid(){
     if(!meta) return '';
     const agg = computeHomeAggregate(type);
     return `
-      <div class="card ${meta.colorClass}">
-        <button class="card-top" data-open-sheet="${type}">
+      <div class="card ${escapeHtml(meta.colorClass)}">
+        <button class="card-top" data-open-sheet="${escapeHtml(type)}">
           <div class="card-icon">${meta.icon}</div>
           <span class="card-plus" aria-hidden="true">+</span>
         </button>
-        <button class="card-bottom" data-open-detail="${type}">
+        <button class="card-bottom" data-open-detail="${escapeHtml(type)}">
           <div class="card-label">${escapeHtml(meta.label)}</div>
           <div class="card-value">${agg.valueHtml}</div>
           <div class="card-time">${agg.timeText}</div>
@@ -1432,7 +1432,7 @@ function trendCardHtml(type, dates, allEntries){
   }
 
   return `
-    <div class="trend-card" data-open-chart="${type}">
+    <div class="trend-card" data-open-chart="${escapeHtml(type)}">
       <div class="trend-head">
         <span class="trend-name" style="color:var(${textSafeColorVar(meta)});">${escapeHtml(meta.label)}</span>
         <span style="display:flex;align-items:center;gap:8px;">
@@ -2427,7 +2427,7 @@ function renderSettingsPanel(){
     const meta = getMetricMeta(type);
     if(!meta) return '';
     const swatches = ALL_COLORS.map(([key,label,cssVar])=>
-      `<button class="swatch${key===meta.colorClass?' selected':''}${haloFillClass(cssVar)}" data-recolor="${type}" data-color="${key}" style="background:var(${cssVar});" aria-label="${label}"></button>`
+      `<button class="swatch${key===meta.colorClass?' selected':''}${haloFillClass(cssVar)}" data-recolor="${escapeHtml(type)}" data-color="${key}" style="background:var(${cssVar});" aria-label="${label}"></button>`
     ).join('');
     return `
       <div class="tabcolor-row">
@@ -2479,7 +2479,10 @@ function exportCsv(){
   URL.revokeObjectURL(url);
 }
 function csvCell(v){
-  const s = String(v==null?'':v);
+  let s = String(v==null?'':v);
+  // Neutralize spreadsheet formula injection: a cell starting with =, +, -, or
+  // @ can run as a formula in Excel/Sheets when this export is later opened.
+  if(/^[=+\-@]/.test(s)) s = "'" + s;
   return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
 }
 

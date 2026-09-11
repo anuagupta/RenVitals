@@ -490,20 +490,6 @@ function buildDailySeriesChart(type, dates, list, meta, opts){
   return out;
 }
 
-/*
- * The seven-day shape of a parameter, drawn small and unlabeled for its
- * Home tile — a glance, not a reading. The full labeled version lives in
- * Trends.
- */
-function buildCardSpark(type, meta){
-  const dates = lastNDates(7);
-  const list = DB.getEntries().filter(e => e.type === type);
-  const chart = buildDailySeriesChart(type, dates, list, meta, {
-    W:300, H:64, padL:6, padR:6, padT:9, padB:9, pointRadius:3, strokeWidth:2
-  });
-  return `<svg class="card-chart" viewBox="0 0 300 64" aria-hidden="true">${chart}</svg>`;
-}
-
 function renderHomeGrid(){
   const grid = $('#home-grid');
   grid.innerHTML = allMetricTypes().map(type=>{
@@ -511,15 +497,17 @@ function renderHomeGrid(){
     if(!meta) return '';
     const agg = computeHomeAggregate(type);
     return `
-      <button class="card ${meta.colorClass}" data-open-detail="${type}">
-        <div class="card-head">
-          <span class="card-icon">${meta.icon}</span>
-          <span class="card-label">${escapeHtml(meta.label)}</span>
-          <span class="card-value">${agg.valueHtml}</span>
-        </div>
-        ${buildCardSpark(type, meta)}
-        <div class="card-time">${agg.timeText}</div>
-      </button>`;
+      <div class="card ${meta.colorClass}">
+        <button class="card-top" data-open-sheet="${type}">
+          <div class="card-icon">${meta.icon}</div>
+          <span class="card-plus" aria-hidden="true">+</span>
+        </button>
+        <button class="card-bottom" data-open-detail="${type}">
+          <div class="card-label">${escapeHtml(meta.label)}</div>
+          <div class="card-value">${agg.valueHtml}</div>
+          <div class="card-time">${agg.timeText}</div>
+        </button>
+      </div>`;
   }).join('');
 }
 
@@ -734,14 +722,6 @@ function initTimeWheelPickers(root){
    ADD / EDIT SHEET
    ========================================================================= */
 function fieldsHtmlFor(kind, existing){
-  if(kind === 'picker'){
-    return `<div class="chips" id="log-picker-chips">${allMetricTypes().map(type=>{
-      const meta = getMetricMeta(type);
-      if(!meta) return '';
-      return `<div class="chip" data-pick-type="${type}"><span class="color-dot" style="background:var(${meta.colorVar});"></span>${escapeHtml(meta.label)}</div>`;
-    }).join('')}</div>`;
-  }
-
   if(kind === 'medicine'){
     const timeVal = existing ? existing.time : nextRoundHour();
     const days = existing ? existing.days : 'daily';
@@ -845,7 +825,6 @@ function openSheet(kind, editId){
   currentEditId = editId || null;
   const isMedicine = kind === 'medicine';
   const isNewMetric = kind === 'new-metric';
-  const isPicker = kind === 'picker';
   const isEdit = !!currentEditId;
 
   let existing = null;
@@ -855,23 +834,20 @@ function openSheet(kind, editId){
       : DB.getEntries().find(e=>e.id===currentEditId);
   }
 
-  const meta = (isNewMetric || isPicker) ? null : getMetricMeta(kind);
+  const meta = isNewMetric ? null : getMetricMeta(kind);
   $('#sheet-title').textContent = isMedicine
     ? (isEdit ? 'Edit medicine' : 'New medicine')
     : isNewMetric
       ? (isEdit ? 'Edit health parameter' : 'New health parameter')
-      : isPicker
-        ? 'Log a reading'
-        : (isEdit ? `Edit ${meta.sheetNoun}` : `Log ${meta.sheetNoun}`);
+      : (isEdit ? `Edit ${meta.sheetNoun}` : `Log ${meta.sheetNoun}`);
   $('#sheet-sub').textContent = isMedicine ? 'Repeats on the days and times you choose'
     : isNewMetric ? 'Shows up as its own card on Home and Trends'
-    : isPicker ? 'Choose what you’re logging'
     : ('Now · ' + formatTime(Date.now()));
   $('#sheet-fields').innerHTML = fieldsHtmlFor(kind, existing);
   initTimeWheelPickers($('#sheet-fields'));
 
   const noteLabel = $('#note-field-label'), noteInput = $('#sheet-note');
-  if(isMedicine || isNewMetric || isPicker){
+  if(isMedicine || isNewMetric){
     noteLabel.style.display = 'none'; noteInput.style.display = 'none';
   } else {
     noteLabel.style.display = ''; noteInput.style.display = '';
@@ -879,19 +855,13 @@ function openSheet(kind, editId){
   }
 
   $('#sheet-delete-btn').style.display = isEdit ? '' : 'none';
-  // The picker isn't a form to submit — tapping a parameter chip transitions
-  // straight into that parameter's own fields (see wireSheetFieldsDelegation),
-  // so there's nothing for a Save button to do here.
-  $('#sheet-save-btn').style.display = isPicker ? 'none' : '';
+  $('#sheet-save-btn').style.display = '';
   $('#sheet-save-btn').textContent = isMedicine ? (isEdit ? 'Save medicine' : 'Add medicine') : 'Done';
 
   attachCustomAmountSync();
 
   $('#scrim').classList.add('show');
   $('#sheet').classList.add('show');
-}
-function openLogPicker(){
-  openSheet('picker');
 }
 function closeSheet(){
   $('#scrim').classList.remove('show');
@@ -911,11 +881,6 @@ function wireSheetFieldsDelegation(){
   $('#sheet-fields').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if(!chip) return;
-
-    if(chip.dataset.pickType !== undefined){
-      openSheet(chip.dataset.pickType);
-      return;
-    }
 
     if(chip.dataset.day !== undefined){
       chip.classList.toggle('selected');
@@ -2313,6 +2278,20 @@ async function enableBiometric(){
     alert("This browser doesn't support Face/Fingerprint unlock.");
     return false;
   }
+  // Check for an actual working sensor before opening the OS ceremony —
+  // window.PublicKeyCredential existing only means the API is present, not
+  // that this device has a fingerprint/face reader enrolled. Without this,
+  // a device with no sensor set up just silently fails the step below with
+  // no feedback, which reads as "the toggle doesn't do anything."
+  if(window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable){
+    try{
+      const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      if(!available){
+        alert("No fingerprint or face unlock is set up on this device yet. Add one in your phone's own Settings app first, then try again here.");
+        return false;
+      }
+    } catch(e){ /* if the check itself fails, fall through and let the real attempt below report the actual error */ }
+  }
   try{
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const userId = crypto.getRandomValues(new Uint8Array(16));
@@ -2334,6 +2313,15 @@ async function enableBiometric(){
     return true;
   } catch(e){
     console.warn('Vitals: biometric setup failed', e);
+    // A cancelled or failed setup used to leave the toggle looking like it
+    // simply didn't respond — nothing told the user why. Name says exactly
+    // what happened for the two common cases (declined the OS prompt, or
+    // the ceremony genuinely isn't supported here) instead of staying silent.
+    if(e && e.name === 'NotAllowedError'){
+      alert('Face/Fingerprint setup was cancelled.');
+    } else {
+      alert("Couldn't set up Face/Fingerprint unlock on this device" + (e && e.message ? ': ' + e.message : '.'));
+    }
     return false;
   }
 }
@@ -2343,7 +2331,13 @@ async function tryBiometricUnlock(autoStart = false){
   let timer = null;
   try{
     const controller = new AbortController();
-    const timeout = autoStart ? 5000 : 60000;
+    // 5s here used to be tight enough that the OS fingerprint sheet could
+    // still be rendering, or the user still reacting to it, when this
+    // silently gave up and fell back to the passcode keypad with no sign
+    // anything had been attempted. 20s gives a real touch-the-sensor
+    // interaction room to actually happen; the manual tap on the
+    // fingerprint icon (autoStart=false) already used the longer 60s.
+    const timeout = autoStart ? 20000 : 60000;
     timer = setTimeout(()=>controller.abort(), timeout);
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const cred = await navigator.credentials.get({
@@ -2505,9 +2499,10 @@ function wireEvents(){
   $('#settings-btn').addEventListener('click', ()=> showPanel('settings'));
 
   $all('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
-  $('#home-fab').addEventListener('click', openLogPicker);
 
   $('#home-grid').addEventListener('click', (e)=>{
+    const openSheetBtn = e.target.closest('[data-open-sheet]');
+    if(openSheetBtn){ openSheet(openSheetBtn.dataset.openSheet); return; }
     const openDetailBtn = e.target.closest('[data-open-detail]');
     if(openDetailBtn){ openDetail(openDetailBtn.dataset.openDetail); }
   });

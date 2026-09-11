@@ -304,15 +304,6 @@ function buildDailySeriesChart(type, dates, list, meta, opts){
 /* ---------------------------------------------------------------------
    Tiles (Home-screen equivalent — today's summary per parameter)
    --------------------------------------------------------------------- */
-function cardSparkHtml(type, entries, meta){
-  const dates = lastNDates(7);
-  const list = entries.filter(e => e.type === type);
-  const chart = buildDailySeriesChart(type, dates, list, meta, {
-    W:300, H:64, padL:6, padR:6, padT:9, padB:9, pointRadius:3, strokeWidth:2
-  });
-  return `<svg class="card-chart" viewBox="0 0 300 64" aria-hidden="true">${chart}</svg>`;
-}
-
 function tileHtml(type, entries, customMetrics){
   const meta = getMetricMeta(type, customMetrics);
   if(!meta) return '';
@@ -339,13 +330,14 @@ function tileHtml(type, entries, customMetrics){
 
   return `
     <button class="card ${meta.colorClass}" data-open-detail="${type}">
-      <div class="card-head">
-        <span class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${meta.icon}</svg></span>
-        <span class="card-label">${escapeHtml(meta.label)}</span>
-        <span class="card-value">${valueHtml}</span>
+      <div class="card-top">
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${meta.icon}</svg></div>
       </div>
-      ${cardSparkHtml(type, entries, meta)}
-      <div class="card-time">${subHtml}</div>
+      <div class="card-bottom">
+        <div class="card-label">${escapeHtml(meta.label)}</div>
+        <div class="card-value">${valueHtml}</div>
+        <div class="card-time">${subHtml}</div>
+      </div>
     </button>`;
 }
 

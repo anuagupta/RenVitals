@@ -16,19 +16,24 @@ const DB = {
     catch(e){ console.warn('Vitals: failed to read', key, e); return fallback; }
   },
   _set(key, value){
-    try{ localStorage.setItem(key, JSON.stringify(value)); }
-    catch(e){ console.warn('Vitals: failed to save', key, e); }
+    // Returns whether the write actually landed, so callers on the critical
+    // "new data just came in" path (see saveEntryFromSheet etc.) can tell
+    // the user their reading wasn't saved instead of silently discarding it
+    // — e.g. if on-device storage is full, which is the one realistic way
+    // this synchronous, local-first write can fail.
+    try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch(e){ console.warn('Vitals: failed to save', key, e); return false; }
   },
   getEntries(){ return this._get('vitals:entries', []); },
-  saveEntries(list){ this._set('vitals:entries', list); },
+  saveEntries(list){ return this._set('vitals:entries', list); },
   getMedicines(){ return this._get('vitals:medicines', []); },
-  saveMedicines(list){ this._set('vitals:medicines', list); },
+  saveMedicines(list){ return this._set('vitals:medicines', list); },
   getDoseLog(){ return this._get('vitals:doseLog', {}); },
-  saveDoseLog(log){ this._set('vitals:doseLog', log); },
+  saveDoseLog(log){ return this._set('vitals:doseLog', log); },
   getMedFiredLog(){ return this._get('vitals:medFiredLog', {}); },
-  saveMedFiredLog(log){ this._set('vitals:medFiredLog', log); },
+  saveMedFiredLog(log){ return this._set('vitals:medFiredLog', log); },
   getCustomMetrics(){ return this._get('vitals:customMetrics', []); },
-  saveCustomMetrics(list){ this._set('vitals:customMetrics', list); },
+  saveCustomMetrics(list){ return this._set('vitals:customMetrics', list); },
   getColorOverrides(){ return this._get('vitals:colorOverrides', {}); },
   saveColorOverrides(o){ this._set('vitals:colorOverrides', o); },
   getSettings(){ return this._get('vitals:settings', {
@@ -960,7 +965,10 @@ function saveEntry(){
   let entries = DB.getEntries();
   const idx = entries.findIndex(e=>e.id===entry.id);
   if(idx >= 0) entries[idx] = entry; else entries.push(entry);
-  DB.saveEntries(entries);
+  if(!DB.saveEntries(entries)){
+    flashSheetError("Couldn't save — device storage is full");
+    return;
+  }
 
   if(window.VitalsDrive) window.VitalsDrive.queueUpsert(entry);
 
@@ -2170,7 +2178,34 @@ function startLockFlow(){
   updateBiometricKeyVisibility();
   if(pendingUnlockAction === 'unlock' && settings.bioEnabled && settings.bioCredId && window.PublicKeyCredential && navigator.credentials){
     setTimeout(()=>tryBiometricUnlock(true), 300);
+    armBiometricAutoRetry();
+  } else {
+    disarmBiometricAutoRetry();
   }
+}
+// Some browsers (notably iOS Safari when the app is installed to the home
+// screen) refuse to show the fingerprint/Face ID sheet from a bare
+// page-load timer with no real user gesture behind it, so the 300ms
+// auto-attempt above can fail silently and the user never sees a prompt at
+// all. The very first tap anywhere on the lock screen is a genuine gesture
+// and — since it happens the instant the user starts using the app — reads
+// to them as "on open" just as much as the timer-based attempt does, so
+// retry once against it instead of leaving them stuck on the passcode pad.
+let bioAutoRetryArmed = false;
+let bioPromptInFlight = false;
+function armBiometricAutoRetry(){
+  if(bioAutoRetryArmed) return;
+  bioAutoRetryArmed = true;
+  document.addEventListener('pointerdown', onBiometricAutoRetryTap, true);
+}
+function disarmBiometricAutoRetry(){
+  if(!bioAutoRetryArmed) return;
+  bioAutoRetryArmed = false;
+  document.removeEventListener('pointerdown', onBiometricAutoRetryTap, true);
+}
+function onBiometricAutoRetryTap(){
+  disarmBiometricAutoRetry();
+  if(isAppLocked() && pendingUnlockAction === 'unlock' && !bioPromptInFlight) tryBiometricUnlock(true);
 }
 function updateBiometricKeyVisibility(){
   const settings = DB.getSettings();
@@ -2226,6 +2261,7 @@ function unlockApp(){
   $('#lock').classList.add('hidden');
   pinBuffer = ''; pinFirstEntry = '';
   clearAutoLockTimer();
+  disarmBiometricAutoRetry();
   renderSettingsPanel();
 
   // The one moment a fresh Drive authentication is allowed to happen
@@ -2328,6 +2364,11 @@ async function enableBiometric(){
 async function tryBiometricUnlock(autoStart = false){
   const settings = DB.getSettings();
   if(!settings.bioEnabled || !settings.bioCredId) return false;
+  // Guards against the 300ms auto-attempt and the first-tap retry (armed in
+  // parallel, see armBiometricAutoRetry) both calling navigator.credentials
+  // .get() at once — most platforms reject a second concurrent request.
+  if(bioPromptInFlight) return false;
+  bioPromptInFlight = true;
   let timer = null;
   try{
     const controller = new AbortController();
@@ -2354,6 +2395,8 @@ async function tryBiometricUnlock(autoStart = false){
   } catch(e){
     if(timer) clearTimeout(timer);
     console.log('Vitals: biometric unavailable/cancelled; passcode remains available.');
+  } finally {
+    bioPromptInFlight = false;
   }
   return false;
 }

@@ -250,6 +250,24 @@ function applyMedicinesListCollapsed(){
   toggle.setAttribute('aria-expanded', medicinesListCollapsed ? 'false' : 'true');
   if(chevron) chevron.classList.toggle('rotated', !medicinesListCollapsed);
 }
+function applyDriveBackupCollapsed(){
+  const panel = $('#drive-backup-panel');
+  const toggle = $('#drive-backup-toggle');
+  const chevron = $('#drive-backup-chevron');
+  if(!panel || !toggle) return;
+  panel.classList.toggle('collapsed', driveBackupCollapsed);
+  toggle.setAttribute('aria-expanded', driveBackupCollapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !driveBackupCollapsed);
+}
+function applyCustomMetricsCollapsed(){
+  const panel = $('#custom-metrics-list');
+  const toggle = $('#custom-metrics-toggle');
+  const chevron = $('#custom-metrics-chevron');
+  if(!panel || !toggle) return;
+  panel.classList.toggle('collapsed', customMetricsCollapsed);
+  toggle.setAttribute('aria-expanded', customMetricsCollapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !customMetricsCollapsed);
+}
 
 /* ---------------------------------------------------------------------
    Local custom-metric de-duplication (offline-safe cleanup)
@@ -355,6 +373,10 @@ let tabColorsCollapsed = true;
 // each time you navigate INTO the Medicines tab (see showPanel below), so
 // the Today checklist is the first thing you see.
 let medicinesListCollapsed = true;
+// Same pattern again for Settings > "Google Drive backup" and "Health
+// parameters" — both start collapsed.
+let driveBackupCollapsed = true;
+let customMetricsCollapsed = true;
 // The app used to give itself a 2-minute grace window before re-locking
 // after being backgrounded (screen off, app switched away from, tab
 // hidden), so a quick app-switch wouldn't force re-authentication. In
@@ -559,10 +581,15 @@ function showPanel(name){
   $('#panel-'+name).classList.add('active');
   $all('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   if(name === 'settings'){
-    // Tab colors always starts collapsed on entering Settings, regardless
-    // of whatever state you left it in last time.
+    // Tab colors, Google Drive backup, and Health parameters all always
+    // start collapsed on entering Settings, regardless of whatever state
+    // you left them in last time.
     tabColorsCollapsed = true;
     applyTabColorsCollapsed();
+    driveBackupCollapsed = true;
+    applyDriveBackupCollapsed();
+    customMetricsCollapsed = true;
+    applyCustomMetricsCollapsed();
   }
   if(name === 'medicines'){
     // All medicines always starts collapsed on entering the Medicines tab,
@@ -2442,6 +2469,7 @@ function renderSettingsPanel(){
       $('#drive-sheet-row').style.display = '';
       $('#drive-sheet-link').href = url;
     }
+    $('#drive-restore-row').style.display = '';
     $('#drive-link-row').style.display = '';
   } else {
     const everConnected = window.VitalsDrive && window.VitalsDrive.hasStoredAuthorization && window.VitalsDrive.hasStoredAuthorization();
@@ -2453,10 +2481,13 @@ function renderSettingsPanel(){
         : 'Sign in to back up your log to a Google Sheet';
     $('#drive-connect-btn').textContent = 'Connect';
     $('#drive-sheet-row').style.display = 'none';
+    $('#drive-restore-row').style.display = 'none';
     $('#drive-link-row').style.display = 'none';
     $('#drive-link-form').style.display = 'none';
   }
 
+  applyDriveBackupCollapsed();
+  applyCustomMetricsCollapsed();
   applyTabColorsCollapsed();
 
   $('#tab-colors-list').innerHTML = allMetricTypes().map(type=>{
@@ -2610,6 +2641,22 @@ function wireEvents(){
     medicinesListCollapsed = !medicinesListCollapsed;
     applyMedicinesListCollapsed();
   });
+
+  const driveBackupToggle = $('#drive-backup-toggle');
+  if(driveBackupToggle){
+    driveBackupToggle.addEventListener('click', ()=>{
+      driveBackupCollapsed = !driveBackupCollapsed;
+      applyDriveBackupCollapsed();
+    });
+  }
+
+  const customMetricsToggle = $('#custom-metrics-toggle');
+  if(customMetricsToggle){
+    customMetricsToggle.addEventListener('click', ()=>{
+      customMetricsCollapsed = !customMetricsCollapsed;
+      applyCustomMetricsCollapsed();
+    });
+  }
   $('#new-medicine-btn').addEventListener('click', async ()=>{
     const perm = await ensureNotificationPermission();
     if(perm !== 'granted') { }
@@ -2696,6 +2743,34 @@ function wireEvents(){
       // explicit tap on this button. Nothing else (refresh, visibility,
       // connectivity change) is allowed to call signIn().
       window.VitalsDrive.signIn();
+    }
+  });
+  // The one deliberate, user-invoked exception to "Drive only ever syncs
+  // phone -> Sheet": pulls in anything the Sheet has that this device
+  // doesn't, for recovering onto a reinstalled/new device. Never runs on
+  // its own — only from this explicit tap.
+  $('#drive-restore-btn').addEventListener('click', async ()=>{
+    if(!window.VitalsDrive || !window.VitalsDrive.restoreFromSheet) return;
+    const ok = confirm("This pulls in anything already on your Google Sheet that isn't on this device yet — for example after reinstalling the app. It will never remove or overwrite anything newer already here. Continue?");
+    if(!ok) return;
+    const btn = $('#drive-restore-btn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Restoring…';
+    try{
+      const result = await window.VitalsDrive.restoreFromSheet();
+      renderAll();
+      renderSettingsPanel();
+      scheduleAllMedicines();
+      const total = result.entries + result.metrics + result.medicines + result.doseLog;
+      alert(total
+        ? `Restored ${total} record${total===1?'':'s'} from your Google Sheet.`
+        : 'This device already has everything from the Sheet.');
+    } catch(e){
+      alert("Couldn't restore from the Sheet" + (e && e.message ? ': ' + e.message : '.'));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
     }
   });
   // Optional manual "Sync now" control — wired only if index.html defines

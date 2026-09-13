@@ -938,6 +938,14 @@ async function linkToExistingSpreadsheet(input){
 
     await ensureSpreadsheetReady();
 
+    /*
+     * This device is joining a Sheet that (presumably) already has the
+     * other device's data on it — pull that in explicitly, the same way
+     * a manual "Restore from Sheet" tap would, since the regular sync
+     * path is push-only and would otherwise leave this device empty.
+     */
+    await restoreFromSheet();
+
     await syncNow(true);
 
     await flushQueue();
@@ -947,7 +955,9 @@ async function linkToExistingSpreadsheet(input){
     /*
      * The link itself succeeded (spreadsheetId is now saved) even if this
      * particular first sync attempt hiccuped, e.g. a momentary network
-     * blip — the regular 60s sync loop will pick it up from here.
+     * blip — the regular 60s sync loop will pick it up from here (it just
+     * won't retry the one-time restore; a manual "Restore from Sheet" tap
+     * in Settings covers that).
      */
     console.warn(
       'Vitals: linked to existing spreadsheet but the first sync failed',
@@ -3066,6 +3076,66 @@ async function flushQueue(){
 
 
 /* =========================================================================
+   MANUAL RESTORE FROM SHEET
+
+   The one deliberate exception to "Drive is push-only" (see syncEntries
+   above). Used only in response to an explicit user action: tapping
+   "Restore from Sheet" in Settings, or linking this device to a Sheet
+   that already has another device's data. Purely additive and
+   last-write-wins — anything already on this device that's the same age
+   or newer is left completely alone; only records this device is missing,
+   or holds an older copy of, get pulled in. Never removes anything
+   locally, and never runs on its own.
+   ========================================================================= */
+async function restoreFromSheet(){
+
+  const result = { entries: 0, metrics: 0, medicines: 0, doseLog: 0 };
+
+  function pullInto(map, remoteList){
+    let added = 0;
+    for(const remote of remoteList){
+      if(!remote || !remote.id || remote.deleted) continue;
+      const local = map.get(remote.id);
+      if(!local || Number(remote.updatedAt || 0) > Number(local.updatedAt || 0)){
+        map.set(remote.id, remote);
+        added++;
+      }
+    }
+    return added;
+  }
+
+  const entryMap = new Map(DB.getEntries().map(e => [e.id, e]));
+  result.entries = pullInto(entryMap, Array.from((await getRemoteMap()).values()));
+  DB.saveEntries(Array.from(entryMap.values()));
+
+  if(DB.getCustomMetrics && DB.saveCustomMetrics){
+    const metricMap = new Map(DB.getCustomMetrics().map(m => [m.id, m]));
+    result.metrics = pullInto(metricMap, (await getAllMetricRows()).map(rowToMetric));
+    DB.saveCustomMetrics(Array.from(metricMap.values()));
+  }
+
+  if(DB.getMedicines && DB.saveMedicines){
+    const medicineMap = new Map(DB.getMedicines().map(m => [m.id, m]));
+    result.medicines = pullInto(medicineMap, (await getAllMedicineRows()).map(rowToMedicine));
+    DB.saveMedicines(Array.from(medicineMap.values()));
+  }
+
+  if(DB.getDoseLog && DB.saveDoseLog){
+    const doseLogMap = new Map(Object.values(DB.getDoseLog()).map(e => [e.id, e]));
+    result.doseLog = pullInto(doseLogMap, (await getAllDoseLogRows()).map(rowToDoseLog));
+    const mergedObj = {};
+    doseLogMap.forEach(e => { mergedObj[e.id] = e; });
+    DB.saveDoseLog(mergedObj);
+  }
+
+  notifyStatus();
+
+  return result;
+
+}
+
+
+/* =========================================================================
    AUTOMATIC ONLINE SYNC
    ========================================================================= */
 
@@ -3214,6 +3284,8 @@ window.VitalsDrive = {
 
   flushQueue,
 
-  syncNow
+  syncNow,
+
+  restoreFromSheet
 
 };

@@ -462,6 +462,8 @@ main{flex:1;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
 .collapsible-toggle .chevron{transition:transform .2s ease;flex-shrink:0;color:var(--text-dim-2);}
 .collapsible-toggle .chevron.rotated{transform:rotate(90deg);}
 #tab-colors-list.collapsed{display:none;}
+#drive-backup-panel.collapsed{display:none;}
+#custom-metrics-list.collapsed{display:none;}
 .collapsible-toggle-inline{
   display:flex;align-items:center;gap:7px;background:transparent;border:none;padding:0;
   cursor:pointer;font-family:var(--font-mono);font-size:9.5px;font-weight:500;

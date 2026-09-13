@@ -104,11 +104,17 @@ function rowToEntry(row){
   return entry;
 }
 
+// Metric rows come straight from the shared Google Sheet, so ColorClass is
+// treated as untrusted input: only a value from this allowlist is ever used
+// (matching the app's own ALL_COLORS), anything else falls back to 'orange'.
+const VALID_METRIC_COLORS = ['blue','yellow','red','green','orange','purple','pink','teal','white'];
 function rowToMetric(row){
   if(!row || !row[0]) return null;
   const deleted = String(row[5] || '').toUpperCase() === 'TRUE';
   if(deleted) return null;
-  return {id: row[0], name: row[1] || 'Custom metric', unit: row[2] || '', colorClass: row[3] || 'orange'};
+  const rawColor = String(row[3] || '').trim();
+  const colorClass = VALID_METRIC_COLORS.includes(rawColor) ? rawColor : 'orange';
+  return {id: String(row[0]), name: row[1] || 'Custom metric', unit: row[2] || '', colorClass};
 }
 
 function rowToMedicine(row){
@@ -329,7 +335,7 @@ function tileHtml(type, entries, customMetrics){
   }
 
   return `
-    <button class="card ${meta.colorClass}" data-open-detail="${type}">
+    <button class="card ${escapeHtml(meta.colorClass)}" data-open-detail="${escapeHtml(type)}">
       <div class="card-top">
         <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${meta.icon}</svg></div>
       </div>

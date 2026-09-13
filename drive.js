@@ -223,38 +223,6 @@ function notifyStatus(extra){
 }
 
 
-function notifyDataChanged(){
-
-  window.dispatchEvent(
-    new CustomEvent(
-      'vitals-drive-data-changed'
-    )
-  );
-
-}
-
-
-function normalizeMetricName(name){
-
-  return String(
-    name == null ? '' : name
-  )
-    .trim()
-    .replace(/\s+/g,' ')
-    .toLowerCase();
-
-}
-
-
-function metricUpdatedAt(metric){
-
-  return Number(
-    metric && metric.updatedAt
-  ) || 0;
-
-}
-
-
 /* =========================================================================
    GOOGLE AUTHENTICATION
    ========================================================================= */
@@ -970,6 +938,14 @@ async function linkToExistingSpreadsheet(input){
 
     await ensureSpreadsheetReady();
 
+    /*
+     * This device is joining a Sheet that (presumably) already has the
+     * other device's data on it — pull that in explicitly, the same way
+     * a manual "Restore from Sheet" tap would, since the regular sync
+     * path is push-only and would otherwise leave this device empty.
+     */
+    await restoreFromSheet();
+
     await syncNow(true);
 
     await flushQueue();
@@ -979,7 +955,9 @@ async function linkToExistingSpreadsheet(input){
     /*
      * The link itself succeeded (spreadsheetId is now saved) even if this
      * particular first sync attempt hiccuped, e.g. a momentary network
-     * blip — the regular 60s sync loop will pick it up from here.
+     * blip — the regular 60s sync loop will pick it up from here (it just
+     * won't retry the one-time restore; a manual "Restore from Sheet" tap
+     * in Settings covers that).
      */
     console.warn(
       'Vitals: linked to existing spreadsheet but the first sync failed',
@@ -2004,420 +1982,41 @@ async function upsertMetricRow(
 }
 
 
-/* =========================================================================
-   NORMALIZE / DEDUPLICATE CUSTOM METRICS
-   ========================================================================= */
-
-function canonicalizeMetrics(
-  localMetrics,
-  remoteMetrics
-){
-
-  const groups =
-    new Map();
-
-
-  function add(
-    metric,
-    source
-  ){
-
-    if(
-      !metric ||
-      metric.deleted ||
-      !metric.name
-    ){
-
-      return;
-
-    }
-
-
-    const key =
-      normalizeMetricName(
-        metric.name
-      );
-
-
-    if(!key){
-
-      return;
-
-    }
-
-
-    if(!groups.has(key)){
-
-      groups.set(
-        key,
-        []
-      );
-
-    }
-
-
-    groups
-      .get(key)
-      .push({
-        metric,
-        source
-      });
-
-  }
-
-
-  localMetrics.forEach(
-    metric =>
-      add(
-        metric,
-        'local'
-      )
-  );
-
-
-  remoteMetrics.forEach(
-    metric =>
-      add(
-        metric,
-        'remote'
-      )
-  );
-
-
-  const canonical =
-    [];
-
-  const idRemap =
-    new Map();
-
-
-  for(
-    const [
-      key,
-      items
-    ]
-    of groups
-  ){
-
-    /*
-     * Newest definition wins.
-     * If timestamps tie, choose a deterministic ID.
-     */
-    items.sort(
-      (a,b)=>{
-
-        const timeDifference =
-          metricUpdatedAt(
-            b.metric
-          ) -
-          metricUpdatedAt(
-            a.metric
-          );
-
-
-        if(
-          timeDifference
-        ){
-
-          return timeDifference;
-
-        }
-
-
-        return String(
-          a.metric.id
-        ).localeCompare(
-          String(
-            b.metric.id
-          )
-        );
-
-      }
-    );
-
-
-    const winner =
-      Object.assign(
-        {},
-        items[0].metric
-      );
-
-
-    /*
-     * Deterministic ID prevents the same metric being represented
-     * by a different ID on the phone and tablet.
-     */
-    const ids =
-      new Set(
-        items.map(
-          item =>
-            item.metric.id
-        )
-      );
-
-
-    const preferredId =
-      Array.from(ids)
-        .sort()[0];
-
-
-    winner.id =
-      preferredId;
-
-
-    for(
-      const item
-      of items
-    ){
-
-      idRemap.set(
-        item.metric.id,
-        preferredId
-      );
-
-    }
-
-
-    canonical.push(
-      winner
-    );
-
-  }
-
-
-  return {
-
-    metrics:
-      canonical,
-
-    idRemap
-
-  };
-
-}
-
-
-/* =========================================================================
-   REMAP ENTRIES WHEN A DUPLICATE METRIC ID IS FOUND
-   ========================================================================= */
-
-function remapEntries(
-  entries,
-  idRemap
-){
-
-  let changed =
-    false;
-
-
-  const output =
-    entries.map(
-      entry => {
-
-        if(
-          !entry ||
-          !entry.type
-        ){
-
-          return entry;
-
-        }
-
-
-        const newType =
-          idRemap.get(
-            entry.type
-          );
-
-
-        if(
-          newType &&
-          newType !== entry.type
-        ){
-
-          changed = true;
-
-
-          return Object.assign(
-            {},
-            entry,
-            {
-              type:
-                newType,
-
-              updatedAt:
-                Date.now()
-            }
-          );
-
-        }
-
-
-        return entry;
-
-      }
-    );
-
-
-  return {
-
-    entries:
-      output,
-
-    changed
-
-  };
-
-}
-
 
 /* =========================================================================
    SYNCHRONIZE CUSTOM METRICS
-   ========================================================================= */
 
+   Push-only: read what the Sheet currently has purely to decide which
+   local metric definitions it's missing or holding a stale/different copy
+   of, then write those up. Nothing read back from the Sheet is ever
+   written into localStorage — the phone's own copy is never touched here.
+   ========================================================================= */
 async function syncMetrics(){
 
   const localMetrics =
-    (
-      DB.getCustomMetrics
-        ? DB.getCustomMetrics()
-        : []
-    ).map(
-      metric =>
-        Object.assign(
-          {},
-          metric
-        )
-    );
-
+    (DB.getCustomMetrics ? DB.getCustomMetrics() : [])
+      .map(metric => Object.assign({}, metric));
 
   const remoteRows =
     await getAllMetricRows();
 
+  const remote = new Map();
+  remoteRows.map(rowToMetric).filter(Boolean).forEach(m => remote.set(m.id, m));
 
-  const remoteMetrics =
-    remoteRows
-      .map(rowToMetric)
-      .filter(Boolean);
+  for(const metric of localMetrics){
+    const remoteMetric = remote.get(metric.id);
+    const upToDate =
+      remoteMetric &&
+      !remoteMetric.deleted &&
+      Number(remoteMetric.updatedAt || 0) === Number(metric.updatedAt || 0) &&
+      remoteMetric.name === metric.name &&
+      remoteMetric.unit === metric.unit &&
+      remoteMetric.colorClass === metric.colorClass;
 
-
-  /*
-   * Combine phone/tablet metric definitions and collapse duplicate
-   * names such as:
-   *
-   * Serum Creatinine
-   * Serum creatinine
-   * serum creatinine
-   */
-  const normalized =
-    canonicalizeMetrics(
-      localMetrics,
-      remoteMetrics
-    );
-
-
-  const metrics =
-    normalized.metrics;
-
-  const idRemap =
-    normalized.idRemap;
-
-
-  /*
-   * Change existing entries that point to a duplicate metric ID.
-   */
-  const localEntries =
-    DB.getEntries();
-
-
-  const remapped =
-    remapEntries(
-      localEntries,
-      idRemap
-    );
-
-
-  if(remapped.changed){
-
-    DB.saveEntries(
-      remapped.entries
-    );
-
-  }
-
-
-  /*
-   * Save the normalized metric definitions locally.
-   */
-  if(DB.saveCustomMetrics){
-
-    DB.saveCustomMetrics(
-      metrics
-    );
-
-  }
-
-
-  /*
-   * Make sure every canonical metric exists remotely.
-   */
-  for(
-    const metric
-    of metrics
-  ){
-
-    await upsertMetricRow(
-      metric,
-      false
-    );
-
-  }
-
-
-  /*
-   * Tombstone old duplicate metric IDs on the remote sheet.
-   * This prevents them from coming back during the next sync.
-   */
-  for(
-    const remote
-    of remoteMetrics
-  ){
-
-    const canonicalId =
-      idRemap.get(
-        remote.id
-      );
-
-
-    if(
-      canonicalId &&
-      canonicalId !== remote.id
-    ){
-
-      await upsertMetricRow(
-        Object.assign(
-          {},
-          remote,
-          {
-            updatedAt:
-              Date.now()
-          }
-        ),
-        true
-      );
-
+    if(!upToDate){
+      await upsertMetricRow(metric, false);
     }
-
   }
-
-
-  return {
-
-    metrics,
-
-    idRemap
-
-  };
 
 }
 
@@ -2524,6 +2123,8 @@ async function upsertMedicineRow(medicine, deleted){
   );
 }
 
+// Push-only, same rule as syncMetrics: the Sheet is read only to see what
+// it's missing or holding stale, never written back to localStorage.
 async function syncMedicines(){
   const remoteRows = await getAllMedicineRows();
   const remote = new Map();
@@ -2539,64 +2140,20 @@ async function syncMedicines(){
   });
 
   const localList = (DB.getMedicines ? DB.getMedicines() : []).map(m => Object.assign({}, m));
-  const localMap = new Map();
 
-  localList.forEach(medicine => {
-    const existing = localMap.get(medicine.id);
-    if(!existing || Number(medicine.updatedAt || 0) >= Number(existing.updatedAt || 0)){
-      localMap.set(medicine.id, medicine);
-    }
-  });
+  for(const medicine of localList){
+    const remoteMedicine = remote.get(medicine.id);
+    const upToDate =
+      remoteMedicine &&
+      !remoteMedicine.deleted &&
+      Number(remoteMedicine.updatedAt || 0) === Number(medicine.updatedAt || 0);
 
-  const merged = new Map(localMap);
-  const uploads = [];
-
-  for(const [id, remoteMedicine] of remote){
-    const localMedicine = localMap.get(id);
-
-    if(remoteMedicine.deleted){
-      if(!localMedicine || Number(remoteMedicine.updatedAt || 0) >= Number(localMedicine.updatedAt || 0)){
-        merged.delete(id);
-      }else{
-        uploads.push({ medicine: localMedicine, deleted: false });
-      }
-      continue;
-    }
-
-    if(!localMedicine){
-      merged.set(id, remoteMedicine);
-      continue;
-    }
-
-    const localTime = Number(localMedicine.updatedAt || 0);
-    const remoteTime = Number(remoteMedicine.updatedAt || 0);
-
-    if(remoteTime > localTime){
-      merged.set(id, remoteMedicine);
-    }else if(localTime > remoteTime){
-      uploads.push({ medicine: localMedicine, deleted: false });
+    if(!upToDate){
+      await upsertMedicineRow(medicine, false);
     }
   }
 
-  for(const [id, localMedicine] of localMap){
-    if(!remote.has(id)) uploads.push({ medicine: localMedicine, deleted: false });
-  }
-
-  const mergedList = Array.from(merged.values()).filter(m => m && m.id && !m.deleted);
-
-  if(DB.saveMedicines){
-    DB.saveMedicines(mergedList);
-    notifyDataChanged();
-  }
-
-  const uploadedIds = new Set();
-  for(const item of uploads){
-    if(uploadedIds.has(item.medicine.id)) continue;
-    uploadedIds.add(item.medicine.id);
-    await upsertMedicineRow(item.medicine, item.deleted);
-  }
-
-  return mergedList;
+  return localList;
 }
 
 
@@ -2693,6 +2250,7 @@ async function upsertDoseLogRow(entry, deleted){
   );
 }
 
+// Push-only, same rule as syncMetrics/syncMedicines.
 async function syncDoseLog(){
   const remoteRows = await getAllDoseLogRows();
   const remote = new Map();
@@ -2708,67 +2266,20 @@ async function syncDoseLog(){
   });
 
   const localList = Object.values(DB.getDoseLog ? DB.getDoseLog() : {}).map(e => Object.assign({}, e));
-  const localMap = new Map();
 
-  localList.forEach(entry => {
-    const existing = localMap.get(entry.id);
-    if(!existing || Number(entry.updatedAt || 0) >= Number(existing.updatedAt || 0)){
-      localMap.set(entry.id, entry);
-    }
-  });
+  for(const entry of localList){
+    const remoteEntry = remote.get(entry.id);
+    const upToDate =
+      remoteEntry &&
+      !remoteEntry.deleted &&
+      Number(remoteEntry.updatedAt || 0) === Number(entry.updatedAt || 0);
 
-  const merged = new Map(localMap);
-  const uploads = [];
-
-  for(const [id, remoteEntry] of remote){
-    const localEntry = localMap.get(id);
-
-    if(remoteEntry.deleted){
-      if(!localEntry || Number(remoteEntry.updatedAt || 0) >= Number(localEntry.updatedAt || 0)){
-        merged.delete(id);
-      }else{
-        uploads.push({ entry: localEntry, deleted: false });
-      }
-      continue;
-    }
-
-    if(!localEntry){
-      merged.set(id, remoteEntry);
-      continue;
-    }
-
-    const localTime = Number(localEntry.updatedAt || 0);
-    const remoteTime = Number(remoteEntry.updatedAt || 0);
-
-    if(remoteTime > localTime){
-      merged.set(id, remoteEntry);
-    }else if(localTime > remoteTime){
-      uploads.push({ entry: localEntry, deleted: false });
+    if(!upToDate){
+      await upsertDoseLogRow(entry, false);
     }
   }
 
-  for(const [id, localEntry] of localMap){
-    if(!remote.has(id)) uploads.push({ entry: localEntry, deleted: false });
-  }
-
-  const mergedObj = {};
-  Array.from(merged.values())
-    .filter(e => e && e.id && !e.deleted)
-    .forEach(e => { mergedObj[e.id] = e; });
-
-  if(DB.saveDoseLog){
-    DB.saveDoseLog(mergedObj);
-    notifyDataChanged();
-  }
-
-  const uploadedIds = new Set();
-  for(const item of uploads){
-    if(uploadedIds.has(item.entry.id)) continue;
-    uploadedIds.add(item.entry.id);
-    await upsertDoseLogRow(item.entry, item.deleted);
-  }
-
-  return mergedObj;
+  return localList;
 }
 
 
@@ -2837,323 +2348,38 @@ async function getRemoteMap(){
 
 
 /* =========================================================================
-   TWO-WAY ENTRY SYNCHRONIZATION
+   SYNCHRONIZE ENTRIES — push-only.
+
+   Data loss used to be possible here: if this device's local copy of an
+   entry ever came back stale, empty, or corrupted for any reason (a bad
+   localStorage read, the browser evicting site storage, etc.), this used
+   to treat the Sheet as equally authoritative and could overwrite this
+   device's own data with whatever the Sheet had — including an older or
+   thinner state than what was actually on the phone. There is now exactly
+   one source of truth: this device's own localStorage. The Sheet is read
+   here only to see which local entries it's missing or holding a stale
+   copy of, and those get pushed. Nothing from the Sheet is ever written
+   back into localStorage.
    ========================================================================= */
+async function syncEntries(){
 
-async function syncEntries(
-  idRemap
-){
+  const remote = await getRemoteMap();
+  const local = DB.getEntries();
 
-  const remote =
-    await getRemoteMap();
+  for(const entry of local){
+    const remoteEntry = remote.get(entry.id);
+    const upToDate =
+      remoteEntry &&
+      !remoteEntry.deleted &&
+      Number(remoteEntry.updatedAt || 0) === Number(entry.updatedAt || 0);
 
-
-  const local =
-    DB.getEntries();
-
-
-  /*
-   * Normalize local entries first.
-   */
-  const localMap =
-    new Map();
-
-
-  local.forEach(
-    entry => {
-
-      const normalized =
-        Object.assign(
-          {},
-          entry
-        );
-
-
-      if(
-        normalized.type &&
-        idRemap.has(
-          normalized.type
-        )
-      ){
-
-        normalized.type =
-          idRemap.get(
-            normalized.type
-          );
-
-      }
-
-
-      const existing =
-        localMap.get(
-          normalized.id
-        );
-
-
-      if(
-        !existing ||
-        Number(
-          normalized.updatedAt || 0
-        ) >=
-        Number(
-          existing.updatedAt || 0
-        )
-      ){
-
-        localMap.set(
-          normalized.id,
-          normalized
-        );
-
-      }
-
+    if(!upToDate){
+      await upsertRow(entry, false);
     }
-  );
-
-
-  const merged =
-    new Map(
-      localMap
-    );
-
-
-  const uploads =
-    [];
-
-
-  /*
-   * Compare every remote record.
-   */
-  for(
-    const [
-      id,
-      remoteOriginal
-    ]
-    of remote
-  ){
-
-    const remoteEntry =
-      Object.assign(
-        {},
-        remoteOriginal
-      );
-
-
-    if(
-      remoteEntry.type &&
-      idRemap.has(
-        remoteEntry.type
-      )
-    ){
-
-      remoteEntry.type =
-        idRemap.get(
-          remoteEntry.type
-        );
-
-    }
-
-
-    const localEntry =
-      localMap.get(
-        id
-      );
-
-
-    /*
-     * Remote deletion.
-     */
-    if(
-      remoteEntry.deleted
-    ){
-
-      if(
-        !localEntry ||
-        Number(
-          remoteEntry.updatedAt || 0
-        ) >=
-        Number(
-          localEntry.updatedAt || 0
-        )
-      ){
-
-        merged.delete(
-          id
-        );
-
-      }else{
-
-        uploads.push({
-          entry:
-            localEntry,
-
-          deleted:
-            false
-        });
-
-      }
-
-
-      continue;
-
-    }
-
-
-    /*
-     * Remote-only record.
-     */
-    if(!localEntry){
-
-      merged.set(
-        id,
-        remoteEntry
-      );
-
-      continue;
-
-    }
-
-
-    const localTime =
-      Number(
-        localEntry.updatedAt || 0
-      );
-
-
-    const remoteTime =
-      Number(
-        remoteEntry.updatedAt || 0
-      );
-
-
-    /*
-     * Remote newer → download.
-     */
-    if(
-      remoteTime >
-      localTime
-    ){
-
-      merged.set(
-        id,
-        remoteEntry
-      );
-
-    /*
-     * Local newer → upload.
-     */
-    }else if(
-      localTime >
-      remoteTime
-    ){
-
-      uploads.push({
-        entry:
-          localEntry,
-
-        deleted:
-          false
-      });
-
-    }
-
-  }
-
-
-  /*
-   * Local-only records → upload.
-   */
-  for(
-    const [
-      id,
-      localEntry
-    ]
-    of localMap
-  ){
-
-    if(
-      !remote.has(id)
-    ){
-
-      uploads.push({
-        entry:
-          localEntry,
-
-        deleted:
-          false
-      });
-
-    }
-
-  }
-
-
-  /*
-   * Save merged local dataset.
-   */
-  const mergedList =
-    Array.from(
-      merged.values()
-    )
-      .filter(
-        entry =>
-          entry &&
-          entry.id &&
-          !entry.deleted
-      )
-      .sort(
-        (a,b)=>
-          (a.ts || 0) -
-          (b.ts || 0)
-      );
-
-
-  DB.saveEntries(
-    mergedList
-  );
-
-
-  notifyDataChanged();
-
-
-  /*
-   * Upload local winners.
-   *
-   * De-duplicate the upload queue itself.
-   */
-  const uploadedIds =
-    new Set();
-
-
-  for(
-    const item
-    of uploads
-  ){
-
-    if(
-      uploadedIds.has(
-        item.entry.id
-      )
-    ){
-
-      continue;
-
-    }
-
-
-    uploadedIds.add(
-      item.entry.id
-    );
-
-
-    await upsertRow(
-      item.entry,
-      item.deleted
-    );
-
   }
 
 }
+
 
 
 /* =========================================================================
@@ -3224,22 +2450,16 @@ async function syncNow(force){
 
     /*
      * FIRST:
-     * synchronize metric definitions.
-     *
-     * This is what fixes Weight disappearing and duplicate
-     * Serum Creatinine definitions.
+     * push metric definitions.
      */
-    const metricResult =
-      await syncMetrics();
+    await syncMetrics();
 
 
     /*
      * SECOND:
-     * synchronize actual entries.
+     * push entries.
      */
-    await syncEntries(
-      metricResult.idRemap
-    );
+    await syncEntries();
 
 
     /*
@@ -3856,6 +3076,66 @@ async function flushQueue(){
 
 
 /* =========================================================================
+   MANUAL RESTORE FROM SHEET
+
+   The one deliberate exception to "Drive is push-only" (see syncEntries
+   above). Used only in response to an explicit user action: tapping
+   "Restore from Sheet" in Settings, or linking this device to a Sheet
+   that already has another device's data. Purely additive and
+   last-write-wins — anything already on this device that's the same age
+   or newer is left completely alone; only records this device is missing,
+   or holds an older copy of, get pulled in. Never removes anything
+   locally, and never runs on its own.
+   ========================================================================= */
+async function restoreFromSheet(){
+
+  const result = { entries: 0, metrics: 0, medicines: 0, doseLog: 0 };
+
+  function pullInto(map, remoteList){
+    let added = 0;
+    for(const remote of remoteList){
+      if(!remote || !remote.id || remote.deleted) continue;
+      const local = map.get(remote.id);
+      if(!local || Number(remote.updatedAt || 0) > Number(local.updatedAt || 0)){
+        map.set(remote.id, remote);
+        added++;
+      }
+    }
+    return added;
+  }
+
+  const entryMap = new Map(DB.getEntries().map(e => [e.id, e]));
+  result.entries = pullInto(entryMap, Array.from((await getRemoteMap()).values()));
+  DB.saveEntries(Array.from(entryMap.values()));
+
+  if(DB.getCustomMetrics && DB.saveCustomMetrics){
+    const metricMap = new Map(DB.getCustomMetrics().map(m => [m.id, m]));
+    result.metrics = pullInto(metricMap, (await getAllMetricRows()).map(rowToMetric));
+    DB.saveCustomMetrics(Array.from(metricMap.values()));
+  }
+
+  if(DB.getMedicines && DB.saveMedicines){
+    const medicineMap = new Map(DB.getMedicines().map(m => [m.id, m]));
+    result.medicines = pullInto(medicineMap, (await getAllMedicineRows()).map(rowToMedicine));
+    DB.saveMedicines(Array.from(medicineMap.values()));
+  }
+
+  if(DB.getDoseLog && DB.saveDoseLog){
+    const doseLogMap = new Map(Object.values(DB.getDoseLog()).map(e => [e.id, e]));
+    result.doseLog = pullInto(doseLogMap, (await getAllDoseLogRows()).map(rowToDoseLog));
+    const mergedObj = {};
+    doseLogMap.forEach(e => { mergedObj[e.id] = e; });
+    DB.saveDoseLog(mergedObj);
+  }
+
+  notifyStatus();
+
+  return result;
+
+}
+
+
+/* =========================================================================
    AUTOMATIC ONLINE SYNC
    ========================================================================= */
 
@@ -4004,6 +3284,8 @@ window.VitalsDrive = {
 
   flushQueue,
 
-  syncNow
+  syncNow,
+
+  restoreFromSheet
 
 };

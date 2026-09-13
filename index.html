@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=3">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; base-uri 'self'; form-action 'self'; object-src 'none';">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,7 +23,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 
@@ -138,8 +139,11 @@
         </div>
       </div>
 
-      <div class="section-title">Google Drive backup</div>
-      <div class="trend-card" style="padding:4px 16px;">
+      <button class="collapsible-toggle" id="drive-backup-toggle" aria-expanded="false" aria-controls="drive-backup-panel" type="button">
+        Google Drive backup
+        <svg class="chevron" id="drive-backup-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      <div class="trend-card collapsed" id="drive-backup-panel" style="padding:4px 16px;">
         <div class="settings-row">
           <div class="settings-info"><div class="settings-label" id="drive-status-label">Not connected<span class="sync-spinner" id="drive-sync-spinner" hidden></span></div><div class="settings-sub" id="drive-status-sub">Sign in to back up your log to a Google Sheet</div></div>
           <button class="mini-btn" id="drive-connect-btn">Connect</button>
@@ -147,6 +151,10 @@
         <div class="settings-row" id="drive-sheet-row" style="display:none;">
           <div class="settings-info"><div class="settings-label">Open your Sheet</div><div class="settings-sub" id="drive-sheet-sub">—</div></div>
           <a class="mini-btn" id="drive-sheet-link" href="#" target="_blank" rel="noopener">Open</a>
+        </div>
+        <div class="settings-row" id="drive-restore-row" style="display:none;">
+          <div class="settings-info"><div class="settings-label">Restore from Sheet</div><div class="settings-sub">Pulls in anything already on the Sheet that isn't on this device yet — never removes or overwrites anything newer already here</div></div>
+          <button class="mini-btn" id="drive-restore-btn">Restore</button>
         </div>
         <div class="settings-row" id="drive-link-row" style="display:none;">
           <div class="settings-info">
@@ -163,22 +171,21 @@
           </div>
           <p class="settings-sub" id="drive-link-status"></p>
         </div>
-      </div>
-
-      <div class="section-title">
-        Health parameters
-        <span class="link" id="new-metric-btn">+ Add</span>
-      </div>
-      <div class="trend-card" id="custom-metrics-list" style="padding:4px 16px;">
-        <p class="empty-hint">No custom parameters yet — add serum creatinine, eGFR, or anything else you want to track.</p>
-      </div>
-
-      <div class="section-title">Data</div>
-      <div class="trend-card" style="padding:4px 16px;">
         <div class="settings-row">
           <div class="settings-info"><div class="settings-label">Export as CSV</div><div class="settings-sub">Download everything stored on this device</div></div>
           <button class="mini-btn" id="export-btn">Export</button>
         </div>
+      </div>
+
+      <div class="section-title">
+        <button class="collapsible-toggle-inline" id="custom-metrics-toggle" aria-expanded="false" aria-controls="custom-metrics-list" type="button">
+          Health parameters
+          <svg class="chevron" id="custom-metrics-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <span class="link" id="new-metric-btn">+ Add</span>
+      </div>
+      <div class="trend-card collapsed" id="custom-metrics-list" style="padding:4px 16px;">
+        <p class="empty-hint">No custom parameters yet — add serum creatinine, eGFR, or anything else you want to track.</p>
       </div>
 
       <button class="collapsible-toggle" id="tab-colors-toggle" aria-expanded="false" aria-controls="tab-colors-list" type="button">
@@ -350,7 +357,7 @@
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="drive.js?v=3"></script>
-<script src="app.js?v=10"></script>
+<script src="drive.js?v=5"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

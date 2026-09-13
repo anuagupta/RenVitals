@@ -16,19 +16,24 @@ const DB = {
     catch(e){ console.warn('Vitals: failed to read', key, e); return fallback; }
   },
   _set(key, value){
-    try{ localStorage.setItem(key, JSON.stringify(value)); }
-    catch(e){ console.warn('Vitals: failed to save', key, e); }
+    // Returns whether the write actually landed, so callers on the critical
+    // "new data just came in" path (see saveEntryFromSheet etc.) can tell
+    // the user their reading wasn't saved instead of silently discarding it
+    // — e.g. if on-device storage is full, which is the one realistic way
+    // this synchronous, local-first write can fail.
+    try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch(e){ console.warn('Vitals: failed to save', key, e); return false; }
   },
   getEntries(){ return this._get('vitals:entries', []); },
-  saveEntries(list){ this._set('vitals:entries', list); },
+  saveEntries(list){ return this._set('vitals:entries', list); },
   getMedicines(){ return this._get('vitals:medicines', []); },
-  saveMedicines(list){ this._set('vitals:medicines', list); },
+  saveMedicines(list){ return this._set('vitals:medicines', list); },
   getDoseLog(){ return this._get('vitals:doseLog', {}); },
-  saveDoseLog(log){ this._set('vitals:doseLog', log); },
+  saveDoseLog(log){ return this._set('vitals:doseLog', log); },
   getMedFiredLog(){ return this._get('vitals:medFiredLog', {}); },
-  saveMedFiredLog(log){ this._set('vitals:medFiredLog', log); },
+  saveMedFiredLog(log){ return this._set('vitals:medFiredLog', log); },
   getCustomMetrics(){ return this._get('vitals:customMetrics', []); },
-  saveCustomMetrics(list){ this._set('vitals:customMetrics', list); },
+  saveCustomMetrics(list){ return this._set('vitals:customMetrics', list); },
   getColorOverrides(){ return this._get('vitals:colorOverrides', {}); },
   saveColorOverrides(o){ this._set('vitals:colorOverrides', o); },
   getSettings(){ return this._get('vitals:settings', {
@@ -245,6 +250,24 @@ function applyMedicinesListCollapsed(){
   toggle.setAttribute('aria-expanded', medicinesListCollapsed ? 'false' : 'true');
   if(chevron) chevron.classList.toggle('rotated', !medicinesListCollapsed);
 }
+function applyDriveBackupCollapsed(){
+  const panel = $('#drive-backup-panel');
+  const toggle = $('#drive-backup-toggle');
+  const chevron = $('#drive-backup-chevron');
+  if(!panel || !toggle) return;
+  panel.classList.toggle('collapsed', driveBackupCollapsed);
+  toggle.setAttribute('aria-expanded', driveBackupCollapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !driveBackupCollapsed);
+}
+function applyCustomMetricsCollapsed(){
+  const panel = $('#custom-metrics-list');
+  const toggle = $('#custom-metrics-toggle');
+  const chevron = $('#custom-metrics-chevron');
+  if(!panel || !toggle) return;
+  panel.classList.toggle('collapsed', customMetricsCollapsed);
+  toggle.setAttribute('aria-expanded', customMetricsCollapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !customMetricsCollapsed);
+}
 
 /* ---------------------------------------------------------------------
    Local custom-metric de-duplication (offline-safe cleanup)
@@ -350,12 +373,21 @@ let tabColorsCollapsed = true;
 // each time you navigate INTO the Medicines tab (see showPanel below), so
 // the Today checklist is the first thing you see.
 let medicinesListCollapsed = true;
-let autoLockTimer = null;
-// How long the app can sit backgrounded (screen off, app switched away
-// from, tab hidden) before it re-locks itself. A PIN/biometric gate that
-// only ever locks when the app is manually closed or relaunched leaves a
-// real window where someone else can pick up an unlocked phone.
-const AUTO_LOCK_DELAY_MS = 2 * 60 * 1000;
+// Same pattern again for Settings > "Google Drive backup" and "Health
+// parameters" — both start collapsed.
+let driveBackupCollapsed = true;
+let customMetricsCollapsed = true;
+// The app used to give itself a 2-minute grace window before re-locking
+// after being backgrounded (screen off, app switched away from, tab
+// hidden), so a quick app-switch wouldn't force re-authentication. In
+// practice that meant reopening the app within those 2 minutes — which is
+// most real "opens" — never showed the lock screen at all, so the
+// fingerprint prompt never had a lock screen to appear on. The app now
+// locks itself the instant it's backgrounded (see the visibilitychange
+// handler in wireEvents): both because a real PIN/biometric gate on
+// medical data shouldn't leave any grace window where someone else could
+// pick up an unlocked phone, and because that's what actually makes the
+// fingerprint prompt show up "on open" the way it's supposed to.
 
 // Trends > tap-to-expand chart state
 let chartExpandType = null;
@@ -497,12 +529,12 @@ function renderHomeGrid(){
     if(!meta) return '';
     const agg = computeHomeAggregate(type);
     return `
-      <div class="card ${meta.colorClass}">
-        <button class="card-top" data-open-sheet="${type}">
+      <div class="card ${escapeHtml(meta.colorClass)}">
+        <button class="card-top" data-open-sheet="${escapeHtml(type)}">
           <div class="card-icon">${meta.icon}</div>
           <span class="card-plus" aria-hidden="true">+</span>
         </button>
-        <button class="card-bottom" data-open-detail="${type}">
+        <button class="card-bottom" data-open-detail="${escapeHtml(type)}">
           <div class="card-label">${escapeHtml(meta.label)}</div>
           <div class="card-value">${agg.valueHtml}</div>
           <div class="card-time">${agg.timeText}</div>
@@ -549,10 +581,15 @@ function showPanel(name){
   $('#panel-'+name).classList.add('active');
   $all('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   if(name === 'settings'){
-    // Tab colors always starts collapsed on entering Settings, regardless
-    // of whatever state you left it in last time.
+    // Tab colors, Google Drive backup, and Health parameters all always
+    // start collapsed on entering Settings, regardless of whatever state
+    // you left them in last time.
     tabColorsCollapsed = true;
     applyTabColorsCollapsed();
+    driveBackupCollapsed = true;
+    applyDriveBackupCollapsed();
+    customMetricsCollapsed = true;
+    applyCustomMetricsCollapsed();
   }
   if(name === 'medicines'){
     // All medicines always starts collapsed on entering the Medicines tab,
@@ -960,7 +997,10 @@ function saveEntry(){
   let entries = DB.getEntries();
   const idx = entries.findIndex(e=>e.id===entry.id);
   if(idx >= 0) entries[idx] = entry; else entries.push(entry);
-  DB.saveEntries(entries);
+  if(!DB.saveEntries(entries)){
+    flashSheetError("Couldn't save — device storage is full");
+    return;
+  }
 
   if(window.VitalsDrive) window.VitalsDrive.queueUpsert(entry);
 
@@ -1432,7 +1472,7 @@ function trendCardHtml(type, dates, allEntries){
   }
 
   return `
-    <div class="trend-card" data-open-chart="${type}">
+    <div class="trend-card" data-open-chart="${escapeHtml(type)}">
       <div class="trend-head">
         <span class="trend-name" style="color:var(${textSafeColorVar(meta)});">${escapeHtml(meta.label)}</span>
         <span style="display:flex;align-items:center;gap:8px;">
@@ -2170,7 +2210,34 @@ function startLockFlow(){
   updateBiometricKeyVisibility();
   if(pendingUnlockAction === 'unlock' && settings.bioEnabled && settings.bioCredId && window.PublicKeyCredential && navigator.credentials){
     setTimeout(()=>tryBiometricUnlock(true), 300);
+    armBiometricAutoRetry();
+  } else {
+    disarmBiometricAutoRetry();
   }
+}
+// Some browsers (notably iOS Safari when the app is installed to the home
+// screen) refuse to show the fingerprint/Face ID sheet from a bare
+// page-load timer with no real user gesture behind it, so the 300ms
+// auto-attempt above can fail silently and the user never sees a prompt at
+// all. The very first tap anywhere on the lock screen is a genuine gesture
+// and — since it happens the instant the user starts using the app — reads
+// to them as "on open" just as much as the timer-based attempt does, so
+// retry once against it instead of leaving them stuck on the passcode pad.
+let bioAutoRetryArmed = false;
+let bioPromptInFlight = false;
+function armBiometricAutoRetry(){
+  if(bioAutoRetryArmed) return;
+  bioAutoRetryArmed = true;
+  document.addEventListener('pointerdown', onBiometricAutoRetryTap, true);
+}
+function disarmBiometricAutoRetry(){
+  if(!bioAutoRetryArmed) return;
+  bioAutoRetryArmed = false;
+  document.removeEventListener('pointerdown', onBiometricAutoRetryTap, true);
+}
+function onBiometricAutoRetryTap(){
+  disarmBiometricAutoRetry();
+  if(isAppLocked() && pendingUnlockAction === 'unlock' && !bioPromptInFlight) tryBiometricUnlock(true);
 }
 function updateBiometricKeyVisibility(){
   const settings = DB.getSettings();
@@ -2225,7 +2292,7 @@ async function handlePinComplete(){
 function unlockApp(){
   $('#lock').classList.add('hidden');
   pinBuffer = ''; pinFirstEntry = '';
-  clearAutoLockTimer();
+  disarmBiometricAutoRetry();
   renderSettingsPanel();
 
   // The one moment a fresh Drive authentication is allowed to happen
@@ -2243,22 +2310,11 @@ function lockAppNow(){
 function isAppLocked(){
   return !$('#lock').classList.contains('hidden');
 }
-function armAutoLockTimer(){
-  clearAutoLockTimer();
+function lockIfConfigured(){
   const settings = DB.getSettings();
   if(!settings.pinHash) return; // nothing configured to lock behind
   if(isAppLocked()) return;
-  autoLockTimer = setTimeout(()=>{
-    autoLockTimer = null;
-    // Belt-and-braces: only actually lock if we're still hidden and still
-    // unlocked when the timer fires (the user may have come straight back).
-    if(document.visibilityState === 'hidden' && !isAppLocked()){
-      lockAppNow();
-    }
-  }, AUTO_LOCK_DELAY_MS);
-}
-function clearAutoLockTimer(){
-  if(autoLockTimer){ clearTimeout(autoLockTimer); autoLockTimer = null; }
+  lockAppNow();
 }
 
 function b64urlToBytes(b64url){
@@ -2328,6 +2384,11 @@ async function enableBiometric(){
 async function tryBiometricUnlock(autoStart = false){
   const settings = DB.getSettings();
   if(!settings.bioEnabled || !settings.bioCredId) return false;
+  // Guards against the 300ms auto-attempt and the first-tap retry (armed in
+  // parallel, see armBiometricAutoRetry) both calling navigator.credentials
+  // .get() at once — most platforms reject a second concurrent request.
+  if(bioPromptInFlight) return false;
+  bioPromptInFlight = true;
   let timer = null;
   try{
     const controller = new AbortController();
@@ -2354,6 +2415,8 @@ async function tryBiometricUnlock(autoStart = false){
   } catch(e){
     if(timer) clearTimeout(timer);
     console.log('Vitals: biometric unavailable/cancelled; passcode remains available.');
+  } finally {
+    bioPromptInFlight = false;
   }
   return false;
 }
@@ -2406,6 +2469,7 @@ function renderSettingsPanel(){
       $('#drive-sheet-row').style.display = '';
       $('#drive-sheet-link').href = url;
     }
+    $('#drive-restore-row').style.display = '';
     $('#drive-link-row').style.display = '';
   } else {
     const everConnected = window.VitalsDrive && window.VitalsDrive.hasStoredAuthorization && window.VitalsDrive.hasStoredAuthorization();
@@ -2417,17 +2481,20 @@ function renderSettingsPanel(){
         : 'Sign in to back up your log to a Google Sheet';
     $('#drive-connect-btn').textContent = 'Connect';
     $('#drive-sheet-row').style.display = 'none';
+    $('#drive-restore-row').style.display = 'none';
     $('#drive-link-row').style.display = 'none';
     $('#drive-link-form').style.display = 'none';
   }
 
+  applyDriveBackupCollapsed();
+  applyCustomMetricsCollapsed();
   applyTabColorsCollapsed();
 
   $('#tab-colors-list').innerHTML = allMetricTypes().map(type=>{
     const meta = getMetricMeta(type);
     if(!meta) return '';
     const swatches = ALL_COLORS.map(([key,label,cssVar])=>
-      `<button class="swatch${key===meta.colorClass?' selected':''}${haloFillClass(cssVar)}" data-recolor="${type}" data-color="${key}" style="background:var(${cssVar});" aria-label="${label}"></button>`
+      `<button class="swatch${key===meta.colorClass?' selected':''}${haloFillClass(cssVar)}" data-recolor="${escapeHtml(type)}" data-color="${key}" style="background:var(${cssVar});" aria-label="${label}"></button>`
     ).join('');
     return `
       <div class="tabcolor-row">
@@ -2479,7 +2546,10 @@ function exportCsv(){
   URL.revokeObjectURL(url);
 }
 function csvCell(v){
-  const s = String(v==null?'':v);
+  let s = String(v==null?'':v);
+  // Neutralize spreadsheet formula injection: a cell starting with =, +, -, or
+  // @ can run as a formula in Excel/Sheets when this export is later opened.
+  if(/^[=+\-@]/.test(s)) s = "'" + s;
   return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
 }
 
@@ -2571,6 +2641,22 @@ function wireEvents(){
     medicinesListCollapsed = !medicinesListCollapsed;
     applyMedicinesListCollapsed();
   });
+
+  const driveBackupToggle = $('#drive-backup-toggle');
+  if(driveBackupToggle){
+    driveBackupToggle.addEventListener('click', ()=>{
+      driveBackupCollapsed = !driveBackupCollapsed;
+      applyDriveBackupCollapsed();
+    });
+  }
+
+  const customMetricsToggle = $('#custom-metrics-toggle');
+  if(customMetricsToggle){
+    customMetricsToggle.addEventListener('click', ()=>{
+      customMetricsCollapsed = !customMetricsCollapsed;
+      applyCustomMetricsCollapsed();
+    });
+  }
   $('#new-medicine-btn').addEventListener('click', async ()=>{
     const perm = await ensureNotificationPermission();
     if(perm !== 'granted') { }
@@ -2659,6 +2745,34 @@ function wireEvents(){
       window.VitalsDrive.signIn();
     }
   });
+  // The one deliberate, user-invoked exception to "Drive only ever syncs
+  // phone -> Sheet": pulls in anything the Sheet has that this device
+  // doesn't, for recovering onto a reinstalled/new device. Never runs on
+  // its own — only from this explicit tap.
+  $('#drive-restore-btn').addEventListener('click', async ()=>{
+    if(!window.VitalsDrive || !window.VitalsDrive.restoreFromSheet) return;
+    const ok = confirm("This pulls in anything already on your Google Sheet that isn't on this device yet — for example after reinstalling the app. It will never remove or overwrite anything newer already here. Continue?");
+    if(!ok) return;
+    const btn = $('#drive-restore-btn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Restoring…';
+    try{
+      const result = await window.VitalsDrive.restoreFromSheet();
+      renderAll();
+      renderSettingsPanel();
+      scheduleAllMedicines();
+      const total = result.entries + result.metrics + result.medicines + result.doseLog;
+      alert(total
+        ? `Restored ${total} record${total===1?'':'s'} from your Google Sheet.`
+        : 'This device already has everything from the Sheet.');
+    } catch(e){
+      alert("Couldn't restore from the Sheet" + (e && e.message ? ': ' + e.message : '.'));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
   // Optional manual "Sync now" control — wired only if index.html defines
   // it, so this stays a no-op on markup that doesn't have it yet. Kept
   // conceptually separate from Connect: this only asks for a data sync,
@@ -2725,26 +2839,18 @@ function wireEvents(){
 
   window.addEventListener('vitals-drive-status', renderSettingsPanel);
 
-  window.addEventListener('vitals-drive-data-changed', ()=>{
-    renderAll();
-    renderSettingsPanel();
-    // Medicines may have been added/edited/removed by the other device.
-    scheduleAllMedicines();
-  });
-
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible'){
-      clearAutoLockTimer();
       checkMedicinesTick();
       if(window.VitalsDrive){
         if(window.VitalsDrive.syncNow) window.VitalsDrive.syncNow();
         if(window.VitalsDrive.flushQueue) window.VitalsDrive.flushQueue();
       }
     } else {
-      // Screen off, app switched away from, or tab hidden — start the
-      // auto-lock countdown (armAutoLockTimer no-ops if there's no PIN set
-      // or the lock screen is already showing).
-      armAutoLockTimer();
+      // Screen off, app switched away from, or tab hidden — lock right
+      // away (lockIfConfigured no-ops if there's no PIN set or the lock
+      // screen is already showing).
+      lockIfConfigured();
     }
   });
 

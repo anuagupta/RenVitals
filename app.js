@@ -355,12 +355,17 @@ let tabColorsCollapsed = true;
 // each time you navigate INTO the Medicines tab (see showPanel below), so
 // the Today checklist is the first thing you see.
 let medicinesListCollapsed = true;
-let autoLockTimer = null;
-// How long the app can sit backgrounded (screen off, app switched away
-// from, tab hidden) before it re-locks itself. A PIN/biometric gate that
-// only ever locks when the app is manually closed or relaunched leaves a
-// real window where someone else can pick up an unlocked phone.
-const AUTO_LOCK_DELAY_MS = 2 * 60 * 1000;
+// The app used to give itself a 2-minute grace window before re-locking
+// after being backgrounded (screen off, app switched away from, tab
+// hidden), so a quick app-switch wouldn't force re-authentication. In
+// practice that meant reopening the app within those 2 minutes — which is
+// most real "opens" — never showed the lock screen at all, so the
+// fingerprint prompt never had a lock screen to appear on. The app now
+// locks itself the instant it's backgrounded (see the visibilitychange
+// handler in wireEvents): both because a real PIN/biometric gate on
+// medical data shouldn't leave any grace window where someone else could
+// pick up an unlocked phone, and because that's what actually makes the
+// fingerprint prompt show up "on open" the way it's supposed to.
 
 // Trends > tap-to-expand chart state
 let chartExpandType = null;
@@ -2260,7 +2265,6 @@ async function handlePinComplete(){
 function unlockApp(){
   $('#lock').classList.add('hidden');
   pinBuffer = ''; pinFirstEntry = '';
-  clearAutoLockTimer();
   disarmBiometricAutoRetry();
   renderSettingsPanel();
 
@@ -2279,22 +2283,11 @@ function lockAppNow(){
 function isAppLocked(){
   return !$('#lock').classList.contains('hidden');
 }
-function armAutoLockTimer(){
-  clearAutoLockTimer();
+function lockIfConfigured(){
   const settings = DB.getSettings();
   if(!settings.pinHash) return; // nothing configured to lock behind
   if(isAppLocked()) return;
-  autoLockTimer = setTimeout(()=>{
-    autoLockTimer = null;
-    // Belt-and-braces: only actually lock if we're still hidden and still
-    // unlocked when the timer fires (the user may have come straight back).
-    if(document.visibilityState === 'hidden' && !isAppLocked()){
-      lockAppNow();
-    }
-  }, AUTO_LOCK_DELAY_MS);
-}
-function clearAutoLockTimer(){
-  if(autoLockTimer){ clearTimeout(autoLockTimer); autoLockTimer = null; }
+  lockAppNow();
 }
 
 function b64urlToBytes(b64url){
@@ -2771,26 +2764,18 @@ function wireEvents(){
 
   window.addEventListener('vitals-drive-status', renderSettingsPanel);
 
-  window.addEventListener('vitals-drive-data-changed', ()=>{
-    renderAll();
-    renderSettingsPanel();
-    // Medicines may have been added/edited/removed by the other device.
-    scheduleAllMedicines();
-  });
-
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible'){
-      clearAutoLockTimer();
       checkMedicinesTick();
       if(window.VitalsDrive){
         if(window.VitalsDrive.syncNow) window.VitalsDrive.syncNow();
         if(window.VitalsDrive.flushQueue) window.VitalsDrive.flushQueue();
       }
     } else {
-      // Screen off, app switched away from, or tab hidden — start the
-      // auto-lock countdown (armAutoLockTimer no-ops if there's no PIN set
-      // or the lock screen is already showing).
-      armAutoLockTimer();
+      // Screen off, app switched away from, or tab hidden — lock right
+      // away (lockIfConfigured no-ops if there's no PIN set or the lock
+      // screen is already showing).
+      lockIfConfigured();
     }
   });
 

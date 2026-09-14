@@ -23,7 +23,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
 
@@ -335,6 +335,7 @@
       </div>
       <button class="chart-expand-reset" id="chart-expand-reset-zoom" type="button">Reset zoom</button>
     </div>
+    <div class="chart-legend" id="chart-expand-legend" style="padding:0 4px 8px;"></div>
     <div class="chart-expand-body">
       <div class="chart-zoom-viewport" id="chart-zoom-viewport">
         <svg class="chart-zoom-svg" id="chart-expand-svg" viewBox="0 0 640 260" preserveAspectRatio="xMidYMid meet"></svg>
@@ -358,6 +359,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="drive.js?v=5"></script>
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

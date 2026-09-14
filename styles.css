@@ -34,6 +34,15 @@
   --glass-edge:rgba(255,255,255,0.10);
   --glass-sheen:rgba(255,255,255,0.05);
 
+  /* Real frosted-glass tiles/cards — much more translucent than the tab
+     bar's --glass above, because tiles need to show the ambient colour
+     wash (--bloom below) behind them, not just blur a flat ground. */
+  --tile-glass:rgba(255,255,255,0.075);
+  --tile-glass-2:rgba(255,255,255,0.03);
+  --tile-glass-edge:rgba(255,255,255,0.20);
+  --tile-glass-sheen:rgba(255,255,255,0.16);
+  --tile-blur:28px;
+
   /* semantic */
   --danger:#E4574C;
   --success:#34C3A6;
@@ -68,6 +77,10 @@
     --glass:rgba(255,255,255,.86);
     --glass-edge:rgba(10,12,20,0.08);
     --glass-sheen:rgba(255,255,255,0.6);
+    --tile-glass:rgba(255,255,255,0.5);
+    --tile-glass-2:rgba(255,255,255,0.3);
+    --tile-glass-edge:rgba(10,12,20,0.1);
+    --tile-glass-sheen:rgba(255,255,255,0.75);
 
     --blue:#2F72D8;
     --yellow:#B7801C;
@@ -96,6 +109,10 @@
   --glass:rgba(255,255,255,.86);
   --glass-edge:rgba(10,12,20,0.08);
   --glass-sheen:rgba(255,255,255,0.6);
+  --tile-glass:rgba(255,255,255,0.5);
+  --tile-glass-2:rgba(255,255,255,0.3);
+  --tile-glass-edge:rgba(10,12,20,0.1);
+  --tile-glass-sheen:rgba(255,255,255,0.75);
 
   --blue:#2F72D8;
   --yellow:#B7801C;
@@ -135,9 +152,27 @@ button{font-family:inherit;color:inherit;}
   min-height:100dvh;
   background:var(--bg);
   position:relative;
+  isolation:isolate; /* scopes .bloom-layer's negative z-index to this box */
   display:flex;
   flex-direction:column;
 }
+
+/* Ambient colour wash behind every glass surface — the whole trick behind
+   convincing glassmorphism: without something behind it, a frosted panel
+   is just a dim grey box. Negative z-index + .phone's isolation above keeps
+   this behind all real content without needing to touch every element's
+   own z-index. Drifts slowly; off entirely under reduced motion. */
+.bloom-layer{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:-1;}
+.bloom{position:absolute;border-radius:50%;filter:blur(60px);will-change:transform;}
+.bloom-a{width:280px;height:280px;top:-90px;left:-90px;background:var(--blue);opacity:.28;animation:bloomA 24s ease-in-out infinite alternate;}
+.bloom-b{width:260px;height:260px;top:260px;right:-100px;background:var(--purple);opacity:.22;animation:bloomB 29s ease-in-out infinite alternate;}
+.bloom-c{width:220px;height:220px;bottom:140px;left:8%;background:var(--teal);opacity:.18;animation:bloomC 33s ease-in-out infinite alternate;}
+@keyframes bloomA{0%{transform:translate(0,0) scale(1);}100%{transform:translate(20px,16px) scale(1.12);}}
+@keyframes bloomB{0%{transform:translate(0,0) scale(1);}100%{transform:translate(-16px,-14px) scale(0.92);}}
+@keyframes bloomC{0%{transform:translate(0,0) scale(1);}100%{transform:translate(14px,-18px) scale(1.08);}}
+@media (prefers-color-scheme: light){ :root:not([data-theme="dark"]) .bloom{opacity:.42;} }
+:root[data-theme="light"] .bloom{opacity:.42;}
+@media (prefers-reduced-motion: reduce){ .bloom{animation:none !important;} }
 
 /* =========================================================================
    LOCK SCREEN
@@ -226,16 +261,38 @@ main{flex:1;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
    HOME — bifurcated parameter tiles, two per row.
    Top half logs a reading, bottom half opens that parameter's history.
    ========================================================================= */
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;touch-action:pan-y;}
 .card{
-  border-radius:18px;overflow:hidden;background:var(--surface);
-  border:1px solid var(--hairline);display:flex;flex-direction:column;
-  box-shadow:var(--shadow);
+  position:relative;isolation:isolate;overflow:hidden;border-radius:18px;
+  background:linear-gradient(155deg,var(--tile-glass),var(--tile-glass-2));
+  -webkit-backdrop-filter:blur(var(--tile-blur)) saturate(180%);
+  backdrop-filter:blur(var(--tile-blur)) saturate(180%);
+  border:1px solid var(--tile-glass-edge);display:flex;flex-direction:column;
+  box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen);
+  transition:transform .16s cubic-bezier(.2,.9,.3,1), box-shadow .16s ease;
 }
+.card[data-size="full"]{grid-column:1 / -1;}
+/* A slow diagonal light sweep, staggered by each tile's own colour cycling
+   at a slightly different rate — the cue that sells "real glass" over
+   "tinted box". Purely decorative, sits above the tile's own background
+   but below its real content (card-top/card-bottom get z-index:2 below). */
+.card::after{
+  content:'';position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden;border-radius:inherit;
+  background:linear-gradient(75deg,transparent 40%,var(--tile-glass-sheen) 48%,rgba(255,255,255,.22) 50%,var(--tile-glass-sheen) 52%,transparent 60%);
+  background-size:260% 260%;background-position:-160% -160%;
+  animation:sheenSweep 10s cubic-bezier(.3,.1,.2,1) infinite;
+}
+@keyframes sheenSweep{0%,72%{background-position:-160% -160%;}92%,100%{background-position:60% 60%;}}
+@media (prefers-reduced-motion: reduce){ .card::after{animation:none;} }
+/* Tiles settle in on the very first Home render only (see homeGridAnimated
+   in app.js) — a one-time flourish, not replayed on every data refresh. */
+@keyframes tileIn{from{opacity:0;transform:translateY(10px) scale(.95);}to{opacity:1;transform:none;}}
+.card.tile-in{animation:tileIn .5s cubic-bezier(.2,.9,.3,1) backwards;}
+@media (prefers-reduced-motion: reduce){ .card.tile-in{animation:none;} }
 .card-top{
   height:44px;flex-shrink:0;width:100%;border:none;cursor:pointer;
   display:flex;align-items:center;justify-content:space-between;padding:0 12px;
-  position:relative;transition:filter .12s ease;
+  position:relative;z-index:2;transition:filter .12s ease;
   border-bottom:1px solid var(--hairline);
 }
 .card-top:active{filter:brightness(1.25);}
@@ -248,6 +305,7 @@ main{flex:1;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
   color:var(--bg);
 }
 .card-bottom{
+  position:relative;z-index:2;
   flex:1;width:100%;border:none;background:transparent;cursor:pointer;
   padding:10px 12px 11px;text-align:left;
   display:flex;flex-direction:column;transition:background .12s ease;
@@ -259,40 +317,78 @@ main{flex:1;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
   font-size:23px;font-weight:500;letter-spacing:-.04em;line-height:1.15;
   margin-top:3px;color:var(--text);
 }
+.card[data-size="full"] .card-value{font-size:29px;}
 .card-value small{font-size:10px;color:var(--text-dim-2);margin-left:3px;letter-spacing:0;}
 .card-time{
   font-family:var(--font-mono);font-size:8.5px;letter-spacing:.07em;text-transform:uppercase;
   color:var(--text-dim-2);margin-top:auto;padding-top:6px;
 }
 
-/* per-parameter tinting of the logging half */
-.card.blue   .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--blue) 30%,transparent),color-mix(in srgb,var(--blue) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--blue) 20%,transparent);}
+/* per-parameter tinting of the logging half, plus a soft glow of the same
+   colour under the whole tile — "backlit glass" rather than a flat shadow. */
+.card.blue   .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--blue) 46%,transparent),color-mix(in srgb,var(--blue) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--blue) 26%,transparent);}
 .card.blue   .card-icon{color:var(--blue);}
 .card.blue   .card-plus{background:var(--blue);}
-.card.yellow .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--yellow) 30%,transparent),color-mix(in srgb,var(--yellow) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--yellow) 20%,transparent);}
+.card.blue{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--blue) 55%,transparent);}
+.card.yellow .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--yellow) 46%,transparent),color-mix(in srgb,var(--yellow) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--yellow) 26%,transparent);}
 .card.yellow .card-icon{color:var(--yellow);}
 .card.yellow .card-plus{background:var(--yellow);}
-.card.red    .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--red) 30%,transparent),color-mix(in srgb,var(--red) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--red) 20%,transparent);}
+.card.yellow{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--yellow) 55%,transparent);}
+.card.red    .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--red) 46%,transparent),color-mix(in srgb,var(--red) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--red) 26%,transparent);}
 .card.red    .card-icon{color:var(--red);}
 .card.red    .card-plus{background:var(--red);}
-.card.green  .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--green) 30%,transparent),color-mix(in srgb,var(--green) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--green) 20%,transparent);}
+.card.red{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--red) 55%,transparent);}
+.card.green  .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--green) 46%,transparent),color-mix(in srgb,var(--green) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--green) 26%,transparent);}
 .card.green  .card-icon{color:var(--green);}
 .card.green  .card-plus{background:var(--green);}
-.card.orange .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--orange) 30%,transparent),color-mix(in srgb,var(--orange) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--orange) 20%,transparent);}
+.card.green{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--green) 55%,transparent);}
+.card.orange .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--orange) 46%,transparent),color-mix(in srgb,var(--orange) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--orange) 26%,transparent);}
 .card.orange .card-icon{color:var(--orange);}
 .card.orange .card-plus{background:var(--orange);}
-.card.purple .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--purple) 30%,transparent),color-mix(in srgb,var(--purple) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--purple) 20%,transparent);}
+.card.orange{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--orange) 55%,transparent);}
+.card.purple .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--purple) 46%,transparent),color-mix(in srgb,var(--purple) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--purple) 26%,transparent);}
 .card.purple .card-icon{color:var(--purple);}
 .card.purple .card-plus{background:var(--purple);}
-.card.pink   .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--pink) 30%,transparent),color-mix(in srgb,var(--pink) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--pink) 20%,transparent);}
+.card.purple{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--purple) 55%,transparent);}
+.card.pink   .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--pink) 46%,transparent),color-mix(in srgb,var(--pink) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--pink) 26%,transparent);}
 .card.pink   .card-icon{color:var(--pink);}
 .card.pink   .card-plus{background:var(--pink);}
-.card.teal   .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--teal) 30%,transparent),color-mix(in srgb,var(--teal) 10%,transparent));border-bottom-color:color-mix(in srgb,var(--teal) 20%,transparent);}
+.card.pink{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--pink) 55%,transparent);}
+.card.teal   .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--teal) 46%,transparent),color-mix(in srgb,var(--teal) 14%,transparent));border-bottom-color:color-mix(in srgb,var(--teal) 26%,transparent);}
 .card.teal   .card-icon{color:var(--teal);}
 .card.teal   .card-plus{background:var(--teal);}
-.card.white  .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--white) 26%,transparent),color-mix(in srgb,var(--white) 8%,transparent));border-bottom-color:color-mix(in srgb,var(--white) 22%,transparent);}
+.card.teal{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--teal) 55%,transparent);}
+.card.white  .card-top{background:linear-gradient(150deg,color-mix(in srgb,var(--white) 40%,transparent),color-mix(in srgb,var(--white) 12%,transparent));border-bottom-color:color-mix(in srgb,var(--white) 24%,transparent);}
 .card.white  .card-icon{color:var(--white-ink);}
 .card.white  .card-plus{background:var(--white);color:var(--white-ink);}
+.card.white{box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen), 0 10px 24px -10px color-mix(in srgb,var(--white) 45%,transparent);}
+
+/* ---- Edit mode: long-press any Home tile to move or resize it ---- */
+.grid-wrap{position:relative;}
+.home-done-btn{
+  position:absolute;bottom:calc(100% + 6px);right:0;z-index:5;padding:7px 16px;border-radius:99px;
+  background:var(--blue);color:#fff;font-family:var(--font-body);font-size:12px;font-weight:750;
+  border:none;cursor:pointer;box-shadow:0 8px 20px -6px color-mix(in srgb,var(--blue) 60%,transparent);
+  opacity:0;pointer-events:none;transform:translateY(6px);transition:opacity .18s ease,transform .18s ease;
+}
+.home-done-btn.show{opacity:1;pointer-events:auto;transform:none;}
+@keyframes wiggleA{0%,100%{transform:rotate(-1deg);}50%{transform:rotate(1deg);}}
+@keyframes wiggleB{0%,100%{transform:rotate(1deg);}50%{transform:rotate(-1deg);}}
+.grid.edit-mode .card:not(.dragging){animation:wiggleA .24s ease-in-out infinite;}
+.grid.edit-mode .card:not(.dragging):nth-child(even){animation-name:wiggleB;animation-delay:-.12s;}
+@media (prefers-reduced-motion: reduce){ .grid.edit-mode .card{animation:none;} }
+.card.dragging{z-index:20;box-shadow:0 26px 50px -12px rgba(0,0,0,.5);cursor:grabbing;}
+.edit-resize{
+  position:absolute;top:6px;right:6px;z-index:3;width:22px;height:22px;border-radius:50%;
+  background:rgba(8,9,13,.55);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;
+  color:#fff;cursor:pointer;opacity:0;transform:scale(.7);pointer-events:none;
+  transition:opacity .15s ease,transform .15s ease;
+}
+/* Invisible outside edit mode — without this it silently sits on top of
+   the card-top "+" button and would steal its taps even when hidden. */
+.grid.edit-mode .edit-resize{opacity:1;transform:scale(1);pointer-events:auto;}
+.edit-resize svg{width:11px;height:11px;}
 
 /* A white mark disappears on a white card in light mode; these give it an
    outline. Both are no-ops in dark mode, where --white-halo is transparent. */
@@ -303,9 +399,22 @@ main{flex:1;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
    TRENDS
    ========================================================================= */
 .trend-card{
-  padding:15px 16px 10px;border-radius:20px;background:var(--surface);
-  border:1px solid var(--hairline);margin-bottom:11px;box-shadow:var(--shadow);
+  position:relative;isolation:isolate;overflow:hidden;
+  padding:15px 16px 10px;border-radius:20px;
+  background:linear-gradient(155deg,var(--tile-glass),var(--tile-glass-2));
+  -webkit-backdrop-filter:blur(var(--tile-blur)) saturate(180%);
+  backdrop-filter:blur(var(--tile-blur)) saturate(180%);
+  border:1px solid var(--tile-glass-edge);margin-bottom:11px;
+  box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen);
 }
+.trend-card::after{
+  content:'';position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;border-radius:inherit;
+  background:linear-gradient(75deg,transparent 40%,var(--tile-glass-sheen) 48%,rgba(255,255,255,.22) 50%,var(--tile-glass-sheen) 52%,transparent 60%);
+  background-size:260% 260%;background-position:-160% -160%;
+  animation:sheenSweep 11s cubic-bezier(.3,.1,.2,1) infinite;
+}
+@media (prefers-reduced-motion: reduce){ .trend-card::after{animation:none;} }
+.trend-card > *{position:relative;z-index:1;}
 .trend-card[data-open-chart]{cursor:pointer;transition:transform .1s ease;}
 .trend-card[data-open-chart]:active{transform:scale(.985);}
 .trend-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}

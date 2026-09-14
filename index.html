@@ -7,10 +7,10 @@
 <meta name="description" content="A private, offline-first health log for fluid intake, urine output, blood pressure, sugar, and a medicine adherence checklist.">
 <meta name="theme-color" content="#F2F3F6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0B0F" media="(prefers-color-scheme: dark)">
-<link rel="manifest" href="manifest.json?v=3">
-<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=2">
-<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=2">
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=3">
+<link rel="manifest" href="manifest.json?v=4">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png?v=3">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png?v=3">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=4">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; base-uri 'self'; form-action 'self'; object-src 'none';">
@@ -23,11 +23,20 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
 
 <div class="phone">
+
+  <!-- Ambient colour wash behind every glass surface — purely decorative,
+       negative z-index keeps it behind all real content (see isolation on
+       .phone in styles.css). -->
+  <div class="bloom-layer" aria-hidden="true">
+    <div class="bloom bloom-a"></div>
+    <div class="bloom bloom-b"></div>
+    <div class="bloom bloom-c"></div>
+  </div>
 
   <!-- ============ LOCK SCREEN ============ -->
   <div class="lock" id="lock">
@@ -73,7 +82,10 @@
   <main>
     <!-- ============ HOME PANEL ============ -->
     <section class="panel active" id="panel-home">
-      <div class="grid" id="home-grid"><!-- cards rendered by app.js --></div>
+      <div class="grid-wrap" id="home-grid-wrap">
+        <button class="home-done-btn" id="home-done-btn" type="button">Done</button>
+        <div class="grid" id="home-grid"><!-- cards rendered by app.js --></div>
+      </div>
     </section>
 
     <!-- ============ TRENDS PANEL ============ -->
@@ -359,6 +371,6 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="drive.js?v=5"></script>
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

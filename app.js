@@ -36,6 +36,11 @@ const DB = {
   saveCustomMetrics(list){ return this._set('vitals:customMetrics', list); },
   getColorOverrides(){ return this._get('vitals:colorOverrides', {}); },
   saveColorOverrides(o){ this._set('vitals:colorOverrides', o); },
+  // Home tile order + half/full width, set by long-pressing a tile. Purely
+  // a local display preference — like theme/pinHash, never synced to the
+  // Google Sheet.
+  getHomeLayout(){ return this._get('vitals:homeLayout', []); },
+  saveHomeLayout(layout){ this._set('vitals:homeLayout', layout); },
   getSettings(){ return this._get('vitals:settings', {
     pinHash:null, pinSalt:null, theme:'dark', timeFormat:'12h', bioEnabled:false, bioCredId:null, onboarded:false
   }); },
@@ -590,14 +595,37 @@ function buildDailySeriesChart(type, dates, list, meta, opts){
   return out;
 }
 
+// Order + size (half/full width) for Home tiles, set by long-pressing one
+// (see wireHomeGridEditing below). Falls back to the default type order for
+// anything not in the saved layout yet — a freshly added custom metric, or
+// the very first run before any layout has ever been saved.
+function getHomeLayout(){
+  const saved = DB.getHomeLayout().filter(l => l && l.id);
+  const allTypes = allMetricTypes();
+  const savedIds = new Set(saved.map(l=>l.id));
+  const ordered = saved.filter(l => allTypes.includes(l.id));
+  allTypes.forEach(id => { if(!savedIds.has(id)) ordered.push({id, size:'half'}); });
+  return ordered;
+}
+let homeEditMode = false;
+let homeGridAnimated = false;
+
 function renderHomeGrid(){
+  // Don't blow away drag/edit state out from under the user if some other
+  // event (a background timer, a data change) triggers a re-render while
+  // they're mid-rearrange.
+  if(homeEditMode) return;
   const grid = $('#home-grid');
-  grid.innerHTML = allMetricTypes().map(type=>{
+  grid.innerHTML = getHomeLayout().map(({id:type, size}, i)=>{
     const meta = getMetricMeta(type);
     if(!meta) return '';
     const agg = computeHomeAggregate(type);
+    const entranceStyle = homeGridAnimated ? '' : ` style="animation-delay:${i*40}ms;"`;
     return `
-      <div class="card ${escapeHtml(meta.colorClass)}">
+      <div class="card ${escapeHtml(meta.colorClass)}${homeGridAnimated ? '' : ' tile-in'}" data-type="${escapeHtml(type)}" data-size="${size}"${entranceStyle}>
+        <button class="edit-resize" data-resize="${escapeHtml(type)}" type="button" aria-label="Toggle tile size" title="Toggle half/full width">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M20 4l-7 7M4 20l7-7"/></svg>
+        </button>
         <button class="card-top" data-open-sheet="${escapeHtml(type)}">
           <div class="card-icon">${meta.icon}</div>
           <span class="card-plus" aria-hidden="true">+</span>
@@ -609,6 +637,111 @@ function renderHomeGrid(){
         </button>
       </div>`;
   }).join('');
+  homeGridAnimated = true;
+}
+
+/* =========================================================================
+   HOME TILES — long-press to move or resize (half/full width)
+   Order and size are purely a local display preference (see DB.getHomeLayout
+   above) — never synced to the Google Sheet. Reordering moves the actual
+   DOM nodes directly rather than re-rendering mid-drag, so pointer capture
+   and the drag's own inline transform survive every intermediate move.
+   ========================================================================= */
+const HOME_LONG_PRESS_MS = 480, HOME_MOVE_CANCEL_PX = 8;
+let homePressTimer = null, homePressStart = null, homePressType = null;
+let homeSuppressNextClick = false;
+
+function applyHomeEditModeClass(){
+  const grid = $('#home-grid');
+  if(!grid) return;
+  grid.classList.toggle('edit-mode', homeEditMode);
+  const doneBtn = $('#home-done-btn');
+  if(doneBtn) doneBtn.classList.toggle('show', homeEditMode);
+}
+function enterHomeEditMode(){
+  if(homeEditMode) return;
+  homeEditMode = true;
+  homeSuppressNextClick = true;
+  applyHomeEditModeClass();
+  if(navigator.vibrate) navigator.vibrate(12);
+}
+function exitHomeEditMode(){
+  if(!homeEditMode) return;
+  homeEditMode = false;
+  applyHomeEditModeClass();
+  const order = $all('#home-grid .card').map(el => ({ id: el.dataset.type, size: el.dataset.size || 'half' }));
+  DB.saveHomeLayout(order);
+}
+function toggleHomeTileSize(type){
+  const card = $(`#home-grid .card[data-type="${CSS.escape(type)}"]`);
+  if(!card) return;
+  const next = card.dataset.size === 'full' ? 'half' : 'full';
+  card.dataset.size = next;
+  if(!homeEditMode){
+    const order = $all('#home-grid .card').map(el => ({ id: el.dataset.type, size: el.dataset.size || 'half' }));
+    DB.saveHomeLayout(order);
+  }
+}
+function startHomeDrag(card, pointerId, origin){
+  card.classList.add('dragging');
+  try{ card.setPointerCapture(pointerId); }catch(e){}
+  function onMove(ev){
+    const dx = ev.clientX - origin.x, dy = ev.clientY - origin.y;
+    card.style.transform = `translate(${dx}px, ${dy}px) scale(1.04)`;
+    const grid = $('#home-grid');
+    const siblings = $all('.card', grid).filter(c=>c!==card);
+    let target = null, best = Infinity;
+    siblings.forEach(sib=>{
+      const r = sib.getBoundingClientRect();
+      const cx = r.left + r.width/2, cy = r.top + r.height/2;
+      const d = Math.hypot(ev.clientX-cx, ev.clientY-cy);
+      if(d < best){ best = d; target = sib; }
+    });
+    if(target){
+      const tr = target.getBoundingClientRect();
+      const before = ev.clientX < tr.left + tr.width/2;
+      grid.insertBefore(card, before ? target : target.nextSibling);
+    }
+  }
+  function onUp(){
+    card.classList.remove('dragging');
+    card.style.transform = '';
+    card.removeEventListener('pointermove', onMove);
+    card.removeEventListener('pointerup', onUp);
+    card.removeEventListener('pointercancel', onUp);
+    homePressType = null;
+  }
+  card.addEventListener('pointermove', onMove);
+  card.addEventListener('pointerup', onUp);
+  card.addEventListener('pointercancel', onUp);
+}
+function wireHomeGridEditing(){
+  const grid = $('#home-grid');
+  grid.addEventListener('pointerdown', (e)=>{
+    const resizeBtn = e.target.closest('[data-resize]');
+    if(resizeBtn){
+      e.stopPropagation();
+      toggleHomeTileSize(resizeBtn.dataset.resize);
+      return;
+    }
+    if(homeEditMode) return; // dragging is handled once edit mode starts, below
+    const card = e.target.closest('.card');
+    if(!card) return;
+    homePressType = card.dataset.type;
+    homePressStart = { x:e.clientX, y:e.clientY };
+    clearTimeout(homePressTimer);
+    homePressTimer = setTimeout(()=>{
+      if(homePressType){ enterHomeEditMode(); startHomeDrag(card, e.pointerId, homePressStart); }
+    }, HOME_LONG_PRESS_MS);
+  });
+  grid.addEventListener('pointermove', (e)=>{
+    if(!homePressStart || homeEditMode) return;
+    const dx = e.clientX-homePressStart.x, dy = e.clientY-homePressStart.y;
+    if(Math.hypot(dx,dy) > HOME_MOVE_CANCEL_PX){ clearTimeout(homePressTimer); homePressType = null; }
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+    grid.addEventListener(ev, ()=>{ if(!homeEditMode){ clearTimeout(homePressTimer); homePressType = null; } });
+  });
 }
 
 function formatHHMM(hhmm){
@@ -2679,11 +2812,17 @@ function wireEvents(){
   $all('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
 
   $('#home-grid').addEventListener('click', (e)=>{
+    // A long-press that just entered edit mode, or any tap while
+    // rearranging, must not also open the logging sheet/detail underneath.
+    if(homeSuppressNextClick){ homeSuppressNextClick = false; return; }
+    if(homeEditMode) return;
     const openSheetBtn = e.target.closest('[data-open-sheet]');
     if(openSheetBtn){ openSheet(openSheetBtn.dataset.openSheet); return; }
     const openDetailBtn = e.target.closest('[data-open-detail]');
     if(openDetailBtn){ openDetail(openDetailBtn.dataset.openDetail); }
   });
+  wireHomeGridEditing();
+  $('#home-done-btn').addEventListener('click', exitHomeEditMode);
 
   $all('[data-nav]').forEach(el=> el.addEventListener('click', ()=> showPanel(el.dataset.nav)));
 

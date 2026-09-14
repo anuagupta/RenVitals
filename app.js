@@ -2461,10 +2461,18 @@ async function tryBiometricUnlock(autoStart = false){
   if(!settings.bioEnabled || !settings.bioCredId) return false;
   // Guards against the 300ms auto-attempt and the first-tap retry (armed in
   // parallel, see armBiometricAutoRetry) both calling navigator.credentials
-  // .get() at once — most platforms reject a second concurrent request.
-  if(bioPromptInFlight) return false;
+  // .get() at once — most platforms reject a second concurrent request. If
+  // this is still true, someone tapping the fingerprint key sees nothing
+  // happen at all (this returns before the try/catch below ever runs, so
+  // even the alerts added for manual taps never fire) — tell them why
+  // instead of just doing nothing.
+  if(bioPromptInFlight){
+    if(!autoStart) alert("Still waiting on a previous fingerprint/Face attempt. Give it a moment, or use your passcode.");
+    return false;
+  }
   bioPromptInFlight = true;
   let timer = null;
+  let watchdog = null;
   try{
     const controller = new AbortController();
     // 5s here used to be tight enough that the OS fingerprint sheet could
@@ -2475,6 +2483,14 @@ async function tryBiometricUnlock(autoStart = false){
     // fingerprint icon (autoStart=false) already used the longer 60s.
     const timeout = autoStart ? 20000 : 60000;
     timer = setTimeout(()=>controller.abort(), timeout);
+    // Belt-and-braces: some platforms don't reliably reject
+    // navigator.credentials.get() when its AbortSignal fires, which would
+    // otherwise leave bioPromptInFlight stuck true forever — meaning every
+    // future tap, including a deliberate one, silently does nothing via
+    // the guard above, forever, with no error ever shown. This forces the
+    // flag clear a few seconds after the ceremony's own timeout regardless
+    // of whether the browser ever actually settles the promise.
+    watchdog = setTimeout(()=>{ bioPromptInFlight = false; }, timeout + 3000);
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const cred = await navigator.credentials.get({
       publicKey: {
@@ -2508,6 +2524,7 @@ async function tryBiometricUnlock(autoStart = false){
     }
   } finally {
     bioPromptInFlight = false;
+    if(watchdog) clearTimeout(watchdog);
   }
   return false;
 }

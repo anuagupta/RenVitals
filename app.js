@@ -455,14 +455,53 @@ function computeHomeAggregate(type){
  * `dates` still occupies real x-axis space — that's what keeps readings
  * taken more than a day apart honestly spaced instead of bunched together.
  */
+// Daily one-value-per-day series for an arbitrary numeric field, optionally
+// restricted to entries matching filterFn (e.g. a single sugar context).
+// Shared by dailySeriesFor and every multi-series chart below, so a BP or
+// sugar line and the plain single-line charts always aggregate days the
+// same way (day average, real calendar spacing).
+function dailySeriesForField(dates, list, valueFn, filterFn){
+  return dates.map(d=>{
+    const day = list.filter(e => sameDay(e.ts,d) && (!filterFn || filterFn(e)));
+    return day.length ? roundSmart(avg(day.map(valueFn)), 2) : null;
+  });
+}
+
+// Multi-line series for the two parameters that are really more than one
+// number: BP is systolic+diastolic, sugar is fasting/before/after logged
+// separately and not meaningfully averaged together. Returns null for every
+// other type, which keeps them on the single-line path in
+// buildDailySeriesChart. All lines share one parameter colour (already
+// bold/identifying by tile), differentiated by fading opacity rather than
+// introducing unrelated hues.
+function multiSeriesDefsFor(type, dates, list, meta){
+  if(type === 'bp'){
+    return [
+      { label:'Systolic', opacity:1, values: dailySeriesForField(dates, list, e=>e.systolic) },
+      { label:'Diastolic', opacity:0.5, values: dailySeriesForField(dates, list, e=>e.diastolic) }
+    ];
+  }
+  if(type === 'sugar'){
+    const opacities = { fasting:1, after:0.65, before:0.4 };
+    return SUGAR_CONTEXTS.map(([key,label])=>({
+      label,
+      opacity: opacities[key] || 1,
+      values: dailySeriesForField(dates, list, e=>e.value, e=>e.context===key)
+    })).filter(s => s.values.some(v=>v!==null));
+  }
+  return null;
+}
+function chartLegendHtml(type, dates, list, meta){
+  const defs = multiSeriesDefsFor(type, dates, list, meta);
+  if(!defs || defs.length < 2) return '';
+  return `<div class="chart-legend">${defs.map(s=>
+    `<span><i style="background:color-mix(in srgb,var(${meta.colorVar}) ${Math.round(s.opacity*100)}%,transparent)"></i>${escapeHtml(s.label)}</span>`
+  ).join('')}</div>`;
+}
+
 function buildDailySeriesChart(type, dates, list, meta, opts){
   const isVolume = (type === 'liquid' || type === 'urine');
-  const daily = dailySeriesFor(type, dates, list);
-  const series = isVolume ? daily.map(v => v || null) : daily;
-  const n = series.length;
-
-  const presentIdx = [];
-  series.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
+  const n = dates.length;
 
   const {
     W, H, padL = 14, padR = 14, padT = 16, padB = 16,
@@ -471,52 +510,81 @@ function buildDailySeriesChart(type, dates, list, meta, opts){
     minValueLabelGap = 26, emptyMsg = 'No data yet'
   } = opts;
 
-  if(!presentIdx.length){
+  // One implicit series for everything except BP/sugar, which plot every
+  // one of their real numbers (systolic+diastolic, each sugar context)
+  // rather than a single blended average.
+  const multi = multiSeriesDefsFor(type, dates, list, meta);
+  const seriesList = multi || [{ label:meta.label, opacity:1, values: dailySeriesFor(type, dates, list).map(v => isVolume ? (v || null) : v) }];
+
+  const allPresentValues = [];
+  seriesList.forEach(s => s.values.forEach(v => { if(v !== null && v !== undefined) allPresentValues.push(v); }));
+
+  if(!allPresentValues.length){
     return `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--text-dim-2)" font-size="11" font-family="var(--font-body)">${escapeHtml(emptyMsg)}</text>`;
   }
 
-  const present = presentIdx.map(i => series[i]);
-  const min = Math.min(...present), max = Math.max(...present);
+  const min = Math.min(...allPresentValues), max = Math.max(...allPresentValues);
   const range = (max - min) || 1;
   const xForIdx = i => n <= 1 ? (padL + W - padR) / 2 : padL + (i * ((W - padL - padR) / (n - 1)));
-  const xs = presentIdx.map(xForIdx);
-  const ys = present.map(v => (H - padB) - ((v - min) / range) * (H - padT - padB));
-  const pts = xs.map((x,i) => [x, ys[i]]);
+  const yForVal = v => (H - padB) - ((v - min) / range) * (H - padT - padB);
 
   let out = '';
-  if(pts.length > 1){
-    const pathD = pointsToPath(pts);
-    const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},${H-padB} L${xs[0].toFixed(1)},${H-padB} Z`;
-    out += `<path d="${areaD}" fill="var(${meta.colorVar})" opacity="0.09"/>`;
-    out += `<path${haloClass(meta.colorVar)} d="${pathD}" fill="none" stroke="var(${meta.colorVar})" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
-  }
-  pts.forEach(p => out += `<circle${haloClass(meta.colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${pointRadius}" fill="var(${meta.colorVar})"${haloRing(meta.colorVar)}/>`);
+  let anyPresentIdx = [];
 
-  if(showValueLabels){
-    // Skip a label that would land on top of the previous one — a flat
-    // series (a week of identical daily totals) or a busy 30-day range
-    // would otherwise stack illegible text on itself. The most recent
-    // reading is exempted, so today's value is never the one hidden.
-    let lastLabelX = -Infinity;
-    const lastIdx = pts.length - 1;
-    pts.forEach((p,xIdx) => {
-      if(xIdx !== lastIdx && (p[0] - lastLabelX) < minValueLabelGap) return;
-      lastLabelX = p[0];
-      const val = present[xIdx];
-      const label = isVolume ? val.toLocaleString() : String(val);
-      const ly = Math.max(11, p[1] - (pointRadius + 7));
-      out += `<text x="${p[0].toFixed(1)}" y="${ly.toFixed(1)}" class="point-label" text-anchor="middle">${escapeHtml(label)}</text>`;
-    });
-  }
-  if(showDateLabels){
+  seriesList.forEach(s => {
+    const presentIdx = [];
+    s.values.forEach((v,i)=>{ if(v !== null && v !== undefined) presentIdx.push(i); });
+    if(!presentIdx.length) return;
+    if(presentIdx.length > anyPresentIdx.length) anyPresentIdx = presentIdx;
+
+    const present = presentIdx.map(i => s.values[i]);
+    const xs = presentIdx.map(xForIdx);
+    const ys = present.map(yForVal);
+    const pts = xs.map((x,i) => [x, ys[i]]);
+    const stroke = s.opacity >= 1 ? `var(${meta.colorVar})` : `color-mix(in srgb,var(${meta.colorVar}) ${Math.round(s.opacity*100)}%,transparent)`;
+
+    if(pts.length > 1){
+      const pathD = pointsToPath(pts);
+      // Only the primary (fully-opaque) series gets the filled area under
+      // the line — stacking a translucent fill per series on the same
+      // axis would just muddy into an illegible wash.
+      if(s.opacity >= 1){
+        const areaD = pathD + ` L${xs[xs.length-1].toFixed(1)},${H-padB} L${xs[0].toFixed(1)},${H-padB} Z`;
+        out += `<path d="${areaD}" fill="var(${meta.colorVar})" opacity="0.09"/>`;
+      }
+      out += `<path${haloClass(meta.colorVar)} d="${pathD}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    }
+    pts.forEach(p => out += `<circle${haloClass(meta.colorVar)} cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${pointRadius}" fill="${stroke}"${haloRing(meta.colorVar)}/>`);
+
+    if(showValueLabels){
+      // Skip a label that would land on top of the previous one (within
+      // this same series) — a flat run of days or a busy 30-day range
+      // would otherwise stack illegible text on itself. Set
+      // minValueLabelGap to 0 to show every single point's value (used
+      // by the pinch-zoom expanded view). The most recent reading is
+      // always exempted, so today's value is never the one hidden.
+      let lastLabelX = -Infinity;
+      const lastIdx = pts.length - 1;
+      pts.forEach((p,xIdx) => {
+        if(xIdx !== lastIdx && (p[0] - lastLabelX) < minValueLabelGap) return;
+        lastLabelX = p[0];
+        const val = present[xIdx];
+        const label = isVolume ? val.toLocaleString() : String(val);
+        const ly = Math.max(11, p[1] - (pointRadius + 7));
+        out += `<text x="${p[0].toFixed(1)}" y="${ly.toFixed(1)}" class="point-label" text-anchor="middle" opacity="${s.opacity}">${escapeHtml(label)}</text>`;
+      });
+    }
+  });
+
+  if(showDateLabels && anyPresentIdx.length){
     // Thin the x-axis labels on a busy range so they don't collide — the
     // data points themselves are never thinned, only their date captions.
     const labelEvery = n > 12 ? Math.ceil(n/8) : 1;
-    const lastPresent = presentIdx[presentIdx.length-1];
-    presentIdx.forEach((i, xIdx) => {
+    const lastPresent = anyPresentIdx[anyPresentIdx.length-1];
+    anyPresentIdx.forEach((i) => {
       if(i % labelEvery !== 0 && i !== lastPresent) return;
       const label = dates[i].toLocaleDateString([], {day:'numeric', month:'short'});
-      out += `<text x="${xs[xIdx].toFixed(1)}" y="${H-4}" class="time-label" text-anchor="middle">${escapeHtml(label)}</text>`;
+      out += `<text x="${xForIdx(i).toFixed(1)}" y="${H-4}" class="time-label" text-anchor="middle">${escapeHtml(label)}</text>`;
     });
   }
   return out;
@@ -1481,6 +1549,7 @@ function trendCardHtml(type, dates, allEntries){
         </span>
       </div>
       <div class="trend-current">${currentHtml}</div>
+      ${chartLegendHtml(type, dates, list, meta)}
       <svg class="trend-chart" viewBox="0 0 300 126" preserveAspectRatio="none">${chart}</svg>
     </div>`;
 }
@@ -1504,7 +1573,11 @@ function buildExpandedChartSvg(type, rangeDays){
     // headroom for the per-point value labels drawn above each dot.
     W:640, H:260, padL:16, padR:16, padT:28, padB:30,
     pointRadius:5, strokeWidth:3, showValueLabels:true, showDateLabels:true,
-    minValueLabelGap:48, emptyMsg:'No data in this range'
+    // 0 — every single point gets its value labeled here, thinning is only
+    // for the small trend-card preview above. This is the pinch-zoom view,
+    // so there's room, and the whole point of opening it is to read exact
+    // values off the graph.
+    minValueLabelGap:0, emptyMsg:'No data in this range'
   });
 }
 
@@ -1519,6 +1592,8 @@ function openChartExpand(type){
   tmp.innerHTML = agg.valueHtml;
   $('#chart-expand-cat').textContent = meta.label;
   $('#chart-expand-val').textContent = tmp.textContent;
+  const legendEl = $('#chart-expand-legend');
+  if(legendEl) legendEl.innerHTML = chartLegendHtml(type, lastNDates(currentTrendRange), DB.getEntries().filter(e=>e.type===type), meta);
   renderExpandedChart();
   resetChartZoom();
   $('#chart-expand').classList.add('show');
@@ -2414,7 +2489,23 @@ async function tryBiometricUnlock(autoStart = false){
     if(cred){ unlockApp(); return true; }
   } catch(e){
     if(timer) clearTimeout(timer);
-    console.log('Vitals: biometric unavailable/cancelled; passcode remains available.');
+    console.log('Vitals: biometric unavailable/cancelled; passcode remains available.', e);
+    // Stay silent for the two gesture-adjacent auto-attempts (the bare
+    // 300ms timer, and the first-tap retry) — those fire on every single
+    // app open and alerting on each one would be constant noise for
+    // anyone who simply doesn't touch the sensor in time. But an explicit
+    // tap on the fingerprint key is a deliberate "try again" from the
+    // user, so if that one fails, say why instead of silently reverting
+    // to the passcode pad with no explanation at all.
+    if(!autoStart){
+      if(e && e.name === 'NotAllowedError'){
+        alert("Fingerprint/Face didn't match or was cancelled. Use your passcode instead.");
+      } else if(e && e.name === 'InvalidStateError'){
+        alert("This device no longer recognizes the fingerprint/Face set up earlier. Turn Face/Fingerprint unlock off and back on in Settings to re-register it.");
+      } else {
+        alert("Couldn't use Face/Fingerprint unlock right now" + (e && e.message ? ': ' + e.message : '.') + ' Use your passcode instead.');
+      }
+    }
   } finally {
     bioPromptInFlight = false;
   }

@@ -171,12 +171,17 @@ button{font-family:inherit;color:inherit;}
    wash rather than a fixed-color splash. transform and filter are separate
    properties so the two animations run concurrently without conflict. */
 .bloom{position:absolute;border-radius:50%;filter:blur(60px) hue-rotate(0deg);will-change:transform,filter;}
-.bloom-a{width:300px;height:300px;top:-90px;left:-90px;background:#FFC2D8;opacity:.34;animation:bloomA 26s ease-in-out infinite alternate,hueDriftA 34s linear infinite;}
-.bloom-b{width:280px;height:280px;top:260px;right:-110px;background:#C6D0FF;opacity:.30;animation:bloomB 31s ease-in-out infinite alternate,hueDriftB 41s linear infinite;}
-.bloom-c{width:250px;height:250px;bottom:140px;left:6%;background:#BFF3DD;opacity:.26;animation:bloomC 36s ease-in-out infinite alternate,hueDriftC 47s linear infinite;}
-@keyframes bloomA{0%{transform:translate(0,0) scale(1);}100%{transform:translate(20px,16px) scale(1.12);}}
-@keyframes bloomB{0%{transform:translate(0,0) scale(1);}100%{transform:translate(-16px,-14px) scale(0.92);}}
-@keyframes bloomC{0%{transform:translate(0,0) scale(1);}100%{transform:translate(14px,-18px) scale(1.08);}}
+/* Big, fast enough to actually read as motion through a 28px backdrop-blur
+   glass tile -- the original 14-20px drift over 26-36s was smoothed away to
+   nothing by the blur. Large amplitude (70-110px) + a shorter loop is what
+   survives being seen through frosted glass, on every screen alike since
+   .bloom-layer sits behind all of them identically. */
+.bloom-a{width:320px;height:320px;top:-90px;left:-90px;background:#FFC2D8;opacity:.38;animation:bloomA 14s ease-in-out infinite alternate,hueDriftA 20s linear infinite;}
+.bloom-b{width:300px;height:300px;top:260px;right:-110px;background:#C6D0FF;opacity:.34;animation:bloomB 17s ease-in-out infinite alternate,hueDriftB 24s linear infinite;}
+.bloom-c{width:280px;height:280px;bottom:140px;left:6%;background:#BFF3DD;opacity:.30;animation:bloomC 19s ease-in-out infinite alternate,hueDriftC 28s linear infinite;}
+@keyframes bloomA{0%{transform:translate(0,0) scale(1);}100%{transform:translate(95px,75px) scale(1.22);}}
+@keyframes bloomB{0%{transform:translate(0,0) scale(1);}100%{transform:translate(-85px,-65px) scale(0.85);}}
+@keyframes bloomC{0%{transform:translate(0,0) scale(1);}100%{transform:translate(75px,-95px) scale(1.2);}}
 @keyframes hueDriftA{0%{filter:blur(60px) hue-rotate(0deg);}100%{filter:blur(60px) hue-rotate(360deg);}}
 @keyframes hueDriftB{0%{filter:blur(60px) hue-rotate(90deg);}100%{filter:blur(60px) hue-rotate(450deg);}}
 @keyframes hueDriftC{0%{filter:blur(60px) hue-rotate(200deg);}100%{filter:blur(60px) hue-rotate(560deg);}}

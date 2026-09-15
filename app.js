@@ -615,6 +615,7 @@ function renderHomeGrid(){
   // event (a background timer, a data change) triggers a re-render while
   // they're mid-rearrange.
   if(homeEditMode) return;
+  const firstRender = !homeGridAnimated;
   const grid = $('#home-grid');
   grid.innerHTML = getHomeLayout().map(({id:type, size}, i)=>{
     const meta = getMetricMeta(type);
@@ -623,7 +624,7 @@ function renderHomeGrid(){
     const entranceStyle = homeGridAnimated ? '' : ` style="animation-delay:${i*40}ms;"`;
     return `
       <div class="card ${escapeHtml(meta.colorClass)}${homeGridAnimated ? '' : ' tile-in'}" data-type="${escapeHtml(type)}" data-size="${size}"${entranceStyle}>
-        <button class="edit-resize" data-resize="${escapeHtml(type)}" type="button" aria-label="Toggle tile size" title="Toggle half/full width">
+        <button class="edit-resize" data-resize="${escapeHtml(type)}" type="button" aria-label="Cycle tile shape" title="Tap to cycle tile shape">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M20 4l-7 7M4 20l7-7"/></svg>
         </button>
         <button class="card-top" data-open-sheet="${escapeHtml(type)}">
@@ -638,6 +639,35 @@ function renderHomeGrid(){
       </div>`;
   }).join('');
   homeGridAnimated = true;
+  // On the very first render every tile is still mid-flight through the
+  // tile-in entrance animation (scale .95 -> 1) when a rAF fires, so
+  // measuring immediately reads every tile a few px short of its resting
+  // size -- long enough to make the last tile look falsely "short of the
+  // edge" and get stretched. Wait the animation out before measuring; later
+  // re-renders have no entrance animation, so a rAF is snappy enough.
+  if(firstRender){ setTimeout(fillHomeGridGaps, 550); }
+  else { requestAnimationFrame(fillHomeGridGaps); }
+}
+
+/* Grid auto-placement (even with grid-auto-flow:dense) can still leave a
+   single half/tall tile alone in the final row with an empty cell beside
+   it -- there's nothing left to backfill into that slot. Rather than try to
+   re-implement CSS Grid's packing algorithm to predict this, measure the
+   actual rendered layout and stretch the last tile to close the gap if one
+   is found. This is purely visual (never touches data-size / the saved
+   layout), so it's recomputed fresh after every render, resize, or drag. */
+function fillHomeGridGaps(){
+  const grid = $('#home-grid');
+  if(!grid) return;
+  const cards = $all('.card', grid);
+  cards.forEach(c => { c.style.gridColumn = ''; });
+  if(!cards.length) return;
+  const gridRect = grid.getBoundingClientRect();
+  const last = cards[cards.length - 1];
+  const lastRect = last.getBoundingClientRect();
+  if(Math.round(lastRect.right) < Math.round(gridRect.right) - 1){
+    last.style.gridColumn = '1 / -1';
+  }
 }
 
 /* =========================================================================
@@ -672,11 +702,14 @@ function exitHomeEditMode(){
   const order = $all('#home-grid .card').map(el => ({ id: el.dataset.type, size: el.dataset.size || 'half' }));
   DB.saveHomeLayout(order);
 }
+const HOME_TILE_SIZES = ['half', 'full', 'tall', 'full-tall'];
 function toggleHomeTileSize(type){
   const card = $(`#home-grid .card[data-type="${CSS.escape(type)}"]`);
   if(!card) return;
-  const next = card.dataset.size === 'full' ? 'half' : 'full';
+  const i = HOME_TILE_SIZES.indexOf(card.dataset.size);
+  const next = HOME_TILE_SIZES[(i + 1) % HOME_TILE_SIZES.length];
   card.dataset.size = next;
+  fillHomeGridGaps();
   if(!homeEditMode){
     const order = $all('#home-grid .card').map(el => ({ id: el.dataset.type, size: el.dataset.size || 'half' }));
     DB.saveHomeLayout(order);
@@ -684,9 +717,13 @@ function toggleHomeTileSize(type){
 }
 function startHomeDrag(card, pointerId, origin){
   card.classList.add('dragging');
-  try{ card.setPointerCapture(pointerId); }catch(e){}
+  // origin is re-anchored to the pointer's position every time the card
+  // lands in a new grid cell below -- otherwise the translate offset stays
+  // relative to the card's ORIGINAL cell, so after a reorder it drifts away
+  // from the cursor and visually overlaps whatever cell it used to occupy.
+  let anchor = origin;
   function onMove(ev){
-    const dx = ev.clientX - origin.x, dy = ev.clientY - origin.y;
+    const dx = ev.clientX - anchor.x, dy = ev.clientY - anchor.y;
     card.style.transform = `translate(${dx}px, ${dy}px) scale(1.04)`;
     const grid = $('#home-grid');
     const siblings = $all('.card', grid).filter(c=>c!==card);
@@ -701,19 +738,27 @@ function startHomeDrag(card, pointerId, origin){
       const tr = target.getBoundingClientRect();
       const before = ev.clientX < tr.left + tr.width/2;
       grid.insertBefore(card, before ? target : target.nextSibling);
+      anchor = { x: ev.clientX, y: ev.clientY };
+      card.style.transform = 'scale(1.04)';
     }
   }
+  // Listening on window rather than the dragged card itself: insertBefore
+  // above moves the card around the DOM mid-gesture, and relying on pointer
+  // capture / hit-testing to keep finding that same element proved flaky
+  // (it could silently stop receiving pointerup, leaving the drag transform
+  // stuck forever). window always sees the events regardless of reordering.
   function onUp(){
     card.classList.remove('dragging');
     card.style.transform = '';
-    card.removeEventListener('pointermove', onMove);
-    card.removeEventListener('pointerup', onUp);
-    card.removeEventListener('pointercancel', onUp);
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
     homePressType = null;
+    fillHomeGridGaps();
   }
-  card.addEventListener('pointermove', onMove);
-  card.addEventListener('pointerup', onUp);
-  card.addEventListener('pointercancel', onUp);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
 }
 function wireHomeGridEditing(){
   const grid = $('#home-grid');

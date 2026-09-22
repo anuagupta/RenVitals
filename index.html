@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=4">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; base-uri 'self'; form-action 'self'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.googleusercontent.com; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; base-uri 'self'; form-action 'self'; object-src 'none';">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -23,7 +23,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=15">
+<link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
 
@@ -36,6 +36,21 @@
     <div class="bloom bloom-a"></div>
     <div class="bloom bloom-b"></div>
     <div class="bloom bloom-c"></div>
+  </div>
+
+  <!-- ============ ACCOUNT SIGN-IN GATE ============ -->
+  <!-- No "hidden" class by default: covers #lock underneath it (higher
+       z-index, see styles.css) until app.js decides an account is already
+       active, so there's no flash of the wrong screen on load. -->
+  <div class="lock auth-gate" id="auth-gate">
+    <div class="lock-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" width="26" height="26"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+    </div>
+    <p class="lock-title">Vitals</p>
+    <p class="lock-sub">Sign in with Google to continue</p>
+    <div id="google-signin-btn" class="google-signin-btn-wrap"></div>
+    <p class="auth-gate-note">Your data stays on this device. Signing in just keeps everyone's readings separate if more than one person uses this app here.</p>
+    <p class="auth-gate-error" id="auth-gate-error" aria-live="polite"></p>
   </div>
 
   <!-- ============ LOCK SCREEN ============ -->
@@ -70,6 +85,10 @@
         </button>
         <button class="theme-toggle" id="settings-btn" aria-label="Settings">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z"/></svg>
+        </button>
+        <button class="theme-toggle profile-btn" id="profile-btn" aria-label="Profile">
+          <svg id="profile-btn-silhouette" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+          <img id="profile-btn-photo" class="profile-btn-photo" alt="" hidden>
         </button>
       </div>
     </div>
@@ -335,6 +354,45 @@
     </div>
   </div>
 
+  <!-- ============ PROFILE ============ -->
+  <div class="detail" id="profile-page">
+    <div class="detail-header">
+      <div class="detail-back" id="profile-back">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg>
+      </div>
+      <div class="detail-titles">
+        <div class="cat">Vitals</div>
+        <div class="val">Profile</div>
+      </div>
+    </div>
+    <div class="detail-body-wrap">
+      <div class="profile-photo-row">
+        <div class="profile-photo-lg" id="profile-photo-lg">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+        </div>
+      </div>
+      <div class="field-label">Name</div>
+      <div class="input-row"><input type="text" id="profile-name" placeholder="Your name"></div>
+      <div class="field-label">Email</div>
+      <div class="input-row"><input type="text" id="profile-email" disabled></div>
+      <div class="field-label">Gender <span style="text-transform:none;font-weight:400;">(optional)</span></div>
+      <div class="chips" id="profile-gender-chips">
+        <div class="chip" data-chip data-gender="female">Female</div>
+        <div class="chip" data-chip data-gender="male">Male</div>
+        <div class="chip" data-chip data-gender="other">Other</div>
+        <div class="chip" data-chip data-gender="">Prefer not to say</div>
+      </div>
+      <div class="field-label">Age <span style="text-transform:none;font-weight:400;">(optional)</span></div>
+      <div class="input-row"><input type="number" id="profile-age" placeholder="—" inputmode="numeric" min="0" max="130"></div>
+      <div class="sheet-btn-row" style="margin-top:6px;">
+        <button class="save-btn" id="profile-save-btn" type="button">Save</button>
+      </div>
+      <button class="secondary-btn" id="profile-switch-btn" style="margin-top:10px;width:100%;">Switch account</button>
+      <p class="settings-sub" style="text-align:center;margin:8px 0 0;">Keeps this account's data on this device, ready to resume next time.</p>
+      <button class="delete-btn" id="profile-signout-btn" style="margin-top:18px;width:100%;">Sign out and delete my data</button>
+    </div>
+  </div>
+
   <!-- ============ TREND CHART EXPAND ============ -->
   <div class="chart-expand" id="chart-expand">
     <div class="chart-expand-header">
@@ -370,7 +428,7 @@
 </div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="drive.js?v=5"></script>
-<script src="app.js?v=24"></script>
+<script src="drive.js?v=6"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>

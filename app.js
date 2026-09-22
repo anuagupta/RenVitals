@@ -8,6 +8,124 @@
    ========================================================================= */
 
 /* ---------------------------------------------------------------------
+   Accounts — Google Sign-In identity + per-account data namespacing
+   Everything in DB below (entries, medicines, settings incl. PIN, home
+   layout, colors — all of it) lives under a key prefixed with whichever
+   Google account is currently signed in, so more than one person can use
+   this app on the same device/browser with their data fully separated.
+   The auth gate (see ACCOUNT / GOOGLE SIGN-IN further down) guarantees
+   currentAccountId is set before any of the rest of the app runs.
+   --------------------------------------------------------------------- */
+const ACTIVE_ACCOUNT_KEY = 'vitals:activeAccountId';
+const KNOWN_ACCOUNTS_KEY = 'vitals:knownAccounts';
+let currentAccountId = null;
+try{ currentAccountId = localStorage.getItem(ACTIVE_ACCOUNT_KEY) || null; }catch(e){}
+
+function getKnownAccounts(){
+  try{ const raw = localStorage.getItem(KNOWN_ACCOUNTS_KEY); return raw ? JSON.parse(raw) : []; }
+  catch(e){ return []; }
+}
+function saveKnownAccounts(list){
+  try{ localStorage.setItem(KNOWN_ACCOUNTS_KEY, JSON.stringify(list)); }catch(e){}
+}
+function getAccountProfile(id){
+  return getKnownAccounts().find(a => a.id === id) || null;
+}
+// Adds a newly-seen account, or refreshes a returning one's cached
+// name/email/picture (Google's own copies can change between sign-ins).
+function upsertAccountProfile(profile){
+  const list = getKnownAccounts();
+  const i = list.findIndex(a => a.id === profile.id);
+  if(i === -1) list.push(profile); else list[i] = Object.assign({}, list[i], profile);
+  saveKnownAccounts(list);
+  return list[i === -1 ? list.length - 1 : i];
+}
+function getCurrentAccount(){
+  return currentAccountId ? getAccountProfile(currentAccountId) : null;
+}
+function setCurrentAccount(acctId){
+  currentAccountId = acctId;
+  try{ localStorage.setItem(ACTIVE_ACCOUNT_KEY, acctId); }catch(e){}
+}
+// drive.js namespaces its own storage (access token, linked spreadsheet,
+// …) per account too, so it needs to know which one is active — this is
+// the one narrow bridge between the two modules for that.
+window.VitalsAccount = { getCurrentId: () => currentAccountId };
+
+// The app predates accounts entirely -- anyone updating from before this
+// shipped has real data sitting under the old flat vitals:* keys. The
+// very first Google sign-in ever made on a given device adopts that data
+// as its own (a straight key rename, not a parse/re-save, so there's no
+// chance of the migration itself altering anything). Any account signed
+// into afterward — including a second person's, on a shared device —
+// starts from a clean slate instead, since the legacy data is already
+// claimed by then.
+const LEGACY_DATA_KEYS = ['entries','medicines','doseLog','medFiredLog','customMetrics','colorOverrides','homeLayout','settings'];
+function migrateLegacyDataToAccount(acctId){
+  let migratedAny = false;
+  LEGACY_DATA_KEYS.forEach(k => {
+    const legacyKey = 'vitals:' + k;
+    const raw = localStorage.getItem(legacyKey);
+    if(raw != null){
+      localStorage.setItem(`vitals:acct:${acctId}:${k}`, raw);
+      localStorage.removeItem(legacyKey);
+      migratedAny = true;
+    }
+  });
+  return migratedAny;
+}
+
+// Permanently deletes one account's entire local dataset (every
+// vitals:acct:<id>:* key) and drops it from the known-accounts registry.
+// Used by sign-out, which the user explicitly wants to be a real delete —
+// see the confirmation prompt in signOutCurrentAccount below.
+function wipeAccountData(acctId){
+  const prefix = `vitals:acct:${acctId}:`;
+  const toRemove = [];
+  for(let i=0;i<localStorage.length;i++){
+    const k = localStorage.key(i);
+    if(k && k.indexOf(prefix) === 0) toRemove.push(k);
+  }
+  toRemove.forEach(k => localStorage.removeItem(k));
+  saveKnownAccounts(getKnownAccounts().filter(a => a.id !== acctId));
+  if(window.VitalsDrive && window.VitalsDrive.wipeAccountConnection){
+    window.VitalsDrive.wipeAccountConnection(acctId);
+  }
+}
+
+// The everyday action for a shared device: returns to the sign-in gate
+// without touching this account's data at all, which stays exactly as it
+// is under its own namespace. Signing in with the SAME Google account
+// again later (a stable id — Google's "sub") resumes right where it left
+// off, PIN included. This is what makes "more than one person's data on
+// this device" actually usable, as opposed to signOutCurrentAccount below,
+// which is a real, permanent delete for when someone wants their data
+// gone from a shared device rather than just handing it to someone else.
+function switchAccount(){
+  if(!currentAccountId) return;
+  currentAccountId = null;
+  try{ localStorage.removeItem(ACTIVE_ACCOUNT_KEY); }catch(e){}
+  window.location.reload();
+}
+async function signOutCurrentAccount(){
+  if(!currentAccountId) return;
+  const acct = getCurrentAccount();
+  const label = acct ? (acct.name || acct.email || 'this account') : 'this account';
+  const ok = await showConfirmDialog(
+    'Sign out and delete your data?',
+    `This permanently deletes ${label}'s data from this device — entries, medicines, and settings. This can't be undone. To just switch to another account without losing anything, use "Switch account" instead.`
+  );
+  if(!ok) return;
+  wipeAccountData(currentAccountId);
+  currentAccountId = null;
+  try{ localStorage.removeItem(ACTIVE_ACCOUNT_KEY); }catch(e){}
+  // Reload rather than trying to hand-reset every piece of in-memory UI
+  // state back to a pristine pre-account state -- this lands back on the
+  // sign-in gate with a guaranteed-clean slate.
+  window.location.reload();
+}
+
+/* ---------------------------------------------------------------------
    Storage layer
    --------------------------------------------------------------------- */
 const DB = {
@@ -24,27 +142,33 @@ const DB = {
     try{ localStorage.setItem(key, JSON.stringify(value)); return true; }
     catch(e){ console.warn('Vitals: failed to save', key, e); return false; }
   },
-  getEntries(){ return this._get('vitals:entries', []); },
-  saveEntries(list){ return this._set('vitals:entries', list); },
-  getMedicines(){ return this._get('vitals:medicines', []); },
-  saveMedicines(list){ return this._set('vitals:medicines', list); },
-  getDoseLog(){ return this._get('vitals:doseLog', {}); },
-  saveDoseLog(log){ return this._set('vitals:doseLog', log); },
-  getMedFiredLog(){ return this._get('vitals:medFiredLog', {}); },
-  saveMedFiredLog(log){ return this._set('vitals:medFiredLog', log); },
-  getCustomMetrics(){ return this._get('vitals:customMetrics', []); },
-  saveCustomMetrics(list){ return this._set('vitals:customMetrics', list); },
-  getColorOverrides(){ return this._get('vitals:colorOverrides', {}); },
-  saveColorOverrides(o){ this._set('vitals:colorOverrides', o); },
+  _acctKey(key){ return `vitals:acct:${currentAccountId}:${key}`; },
+  getEntries(){ return this._get(this._acctKey('entries'), []); },
+  saveEntries(list){ return this._set(this._acctKey('entries'), list); },
+  getMedicines(){ return this._get(this._acctKey('medicines'), []); },
+  saveMedicines(list){ return this._set(this._acctKey('medicines'), list); },
+  getDoseLog(){ return this._get(this._acctKey('doseLog'), {}); },
+  saveDoseLog(log){ return this._set(this._acctKey('doseLog'), log); },
+  getMedFiredLog(){ return this._get(this._acctKey('medFiredLog'), {}); },
+  saveMedFiredLog(log){ return this._set(this._acctKey('medFiredLog'), log); },
+  getCustomMetrics(){ return this._get(this._acctKey('customMetrics'), []); },
+  saveCustomMetrics(list){ return this._set(this._acctKey('customMetrics'), list); },
+  getColorOverrides(){ return this._get(this._acctKey('colorOverrides'), {}); },
+  saveColorOverrides(o){ this._set(this._acctKey('colorOverrides'), o); },
   // Home tile order + half/full width, set by long-pressing a tile. Purely
   // a local display preference — like theme/pinHash, never synced to the
   // Google Sheet.
-  getHomeLayout(){ return this._get('vitals:homeLayout', []); },
-  saveHomeLayout(layout){ this._set('vitals:homeLayout', layout); },
-  getSettings(){ return this._get('vitals:settings', {
+  getHomeLayout(){ return this._get(this._acctKey('homeLayout'), []); },
+  saveHomeLayout(layout){ this._set(this._acctKey('homeLayout'), layout); },
+  getSettings(){ return this._get(this._acctKey('settings'), {
     pinHash:null, pinSalt:null, theme:'dark', timeFormat:'12h', bioEnabled:false, bioCredId:null, onboarded:false
   }); },
-  saveSettings(s){ this._set('vitals:settings', s); }
+  saveSettings(s){ this._set(this._acctKey('settings'), s); },
+  // Everything this account owns, keyed the same way saveProfileFields
+  // below writes it — gender/age are the only fields Google itself never
+  // provides (see the profile page), so they're plain local fields here.
+  getProfileFields(){ return this._get(this._acctKey('profileFields'), { gender:null, age:null }); },
+  saveProfileFields(f){ this._set(this._acctKey('profileFields'), f); }
 };
 
 /* ---------------------------------------------------------------------
@@ -442,25 +566,28 @@ let customMetricsCollapsed = true;
 // (a force-close) — see shouldShowLockOnOpen below for how that's told
 // apart from a normal background/foreground cycle or a page refresh.
 const LOCK_IDLE_MS = 10 * 60 * 1000;
-const LAST_ACTIVE_KEY = 'vitals:lastActiveAt';
+// Namespaced per account (like everything in DB) -- switching accounts
+// must always re-prompt for THAT account's own PIN, regardless of whether
+// some other account on this device was just unlocked a moment ago.
+function lastActiveKey(){ return `vitals:acct:${currentAccountId}:lastActiveAt`; }
 // sessionStorage (not localStorage): survives a refresh or a normal
 // background/foreground cycle, but is cleared the moment the browsing
 // context is actually torn down -- which is what happens on a force-close,
 // and is the only web-visible signal that distinguishes one from the
 // other. A fresh session with this flag missing means either a genuine
 // first launch, or a relaunch after a force-close.
-const SESSION_UNLOCKED_KEY = 'vitals:sessionUnlocked';
+function sessionUnlockedKey(){ return `vitals:acct:${currentAccountId}:sessionUnlocked`; }
 function markActiveNow(){
-  try{ localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now())); }catch(e){}
+  try{ localStorage.setItem(lastActiveKey(), String(Date.now())); }catch(e){}
 }
 function shouldShowLockOnOpen(){
   const settings = DB.getSettings();
   if(!settings.pinHash) return true; // nothing set up yet -> always show the create-a-passcode flow
   let sessionUnlocked = false;
-  try{ sessionUnlocked = sessionStorage.getItem(SESSION_UNLOCKED_KEY) === '1'; }catch(e){}
+  try{ sessionUnlocked = sessionStorage.getItem(sessionUnlockedKey()) === '1'; }catch(e){}
   if(!sessionUnlocked) return true;
   let lastActive = 0;
-  try{ lastActive = parseInt(localStorage.getItem(LAST_ACTIVE_KEY), 10) || 0; }catch(e){}
+  try{ lastActive = parseInt(localStorage.getItem(lastActiveKey()), 10) || 0; }catch(e){}
   return (Date.now() - lastActive) >= LOCK_IDLE_MS;
 }
 // The counterpart to startLockFlow for when we've decided NOT to show the
@@ -2545,6 +2672,134 @@ async function ensureNotificationPermission(){
 }
 
 /* =========================================================================
+   ACCOUNT SIGN-IN (Google) — gates the whole app before the PIN lock ever
+   runs, since which account is active decides whose namespaced data (and
+   whose PIN) everything below this point is even looking at.
+   ========================================================================= */
+// Decodes a Google ID token's payload client-side (no signature check).
+// That's deliberate and fine here: this token is never sent anywhere or
+// used to authorize a server — it only feeds this device's OWN display of
+// its OWN signed-in name/email/photo. The real security boundary for this
+// app's data stays the per-account PIN/biometric, same as always.
+function decodeGoogleIdToken(jwt){
+  try{
+    const payload = jwt.split('.')[1];
+    const base64 = payload.replace(/-/g,'+').replace(/_/g,'/');
+    const json = decodeURIComponent(
+      atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+    );
+    return JSON.parse(json);
+  }catch(e){ return null; }
+}
+async function handleGoogleCredentialResponse(response){
+  const payload = decodeGoogleIdToken(response.credential);
+  if(!payload || !payload.sub){
+    const err = $('#auth-gate-error');
+    if(err) err.textContent = "Couldn't sign in — please try again.";
+    return;
+  }
+  const profile = {
+    id: payload.sub,
+    email: payload.email || '',
+    name: payload.name || payload.email || 'Account',
+    picture: payload.picture || ''
+  };
+  const isFirstEverAccount = getKnownAccounts().length === 0;
+  upsertAccountProfile(profile);
+  setCurrentAccount(profile.id);
+  if(isFirstEverAccount){
+    migrateLegacyDataToAccount(profile.id);
+    if(window.VitalsDrive && window.VitalsDrive.migrateLegacyConnection){
+      window.VitalsDrive.migrateLegacyConnection(profile.id);
+    }
+  }
+  $('#auth-gate').classList.add('hidden');
+  initForAccount(true);
+}
+function wireAuthGate(){
+  const err = $('#auth-gate-error');
+  if(err) err.textContent = '';
+  if(!window.google || !window.google.accounts || !window.google.accounts.id){
+    if(err) err.textContent = "Couldn't load Google Sign-In — check your connection and reload.";
+    return;
+  }
+  const clientId = window.VitalsDrive && window.VitalsDrive.GOOGLE_CLIENT_ID;
+  if(!clientId){
+    if(err) err.textContent = 'Google Sign-In is not configured.';
+    return;
+  }
+  google.accounts.id.initialize({
+    client_id: clientId,
+    callback: handleGoogleCredentialResponse,
+    auto_select: false
+  });
+  const btn = $('#google-signin-btn');
+  if(btn){
+    btn.innerHTML = '';
+    google.accounts.id.renderButton(btn, { theme:'outline', size:'large', shape:'pill', width:280 });
+  }
+}
+
+/* =========================================================================
+   PROFILE — the icon next to Settings on Home, and its own page (Name,
+   Email, Gender, Age). Name/Email/Photo come from Google; Gender/Age are
+   plain local fields (see DB.getProfileFields) since Google doesn't expose
+   those without a restricted scope this app can't practically use.
+   ========================================================================= */
+function renderProfileIcon(){
+  const acct = getCurrentAccount();
+  const silhouette = $('#profile-btn-silhouette');
+  const photo = $('#profile-btn-photo');
+  if(!silhouette || !photo) return;
+  if(acct && acct.picture){
+    photo.src = acct.picture;
+    photo.hidden = false;
+    silhouette.style.display = 'none';
+  } else {
+    photo.hidden = true;
+    photo.removeAttribute('src');
+    silhouette.style.display = '';
+  }
+}
+function openProfile(){
+  const acct = getCurrentAccount();
+  const fields = DB.getProfileFields();
+  const photoWrap = $('#profile-photo-lg');
+  if(acct && acct.picture){
+    photoWrap.innerHTML = `<img src="${escapeHtml(acct.picture)}" alt="">`;
+  } else {
+    photoWrap.innerHTML = `<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-7 8-7s8 3 8 7"/></svg>`;
+  }
+  $('#profile-name').value = (acct && acct.name) || '';
+  $('#profile-email').value = (acct && acct.email) || '';
+  $('#profile-age').value = fields.age != null ? fields.age : '';
+  $all('#profile-gender-chips .chip').forEach(c => c.classList.toggle('selected', c.dataset.gender === (fields.gender || '')));
+  $('#profile-page').classList.add('show');
+  pushOverlayState(closeProfileDom);
+}
+function closeProfileDom(){
+  $('#profile-page').classList.remove('show');
+}
+function closeProfile(){
+  closeProfileDom();
+  consumeOverlayState();
+}
+function saveProfile(){
+  const acct = getCurrentAccount();
+  if(acct){
+    const name = $('#profile-name').value.trim() || acct.name;
+    upsertAccountProfile({ id: acct.id, name });
+  }
+  const selectedChip = $('#profile-gender-chips .chip.selected');
+  const ageVal = $('#profile-age').value;
+  DB.saveProfileFields({
+    gender: selectedChip ? selectedChip.dataset.gender : null,
+    age: ageVal !== '' ? Math.max(0, Math.min(130, parseInt(ageVal, 10) || 0)) : null
+  });
+  closeProfile();
+}
+
+/* =========================================================================
    PIN LOCK + BIOMETRIC
    ========================================================================= */
 async function sha256Hex(str){
@@ -2667,7 +2922,7 @@ function unlockApp(){
   $('#lock').classList.add('hidden');
   pinBuffer = ''; pinFirstEntry = '';
   disarmBiometricAutoRetry();
-  try{ sessionStorage.setItem(SESSION_UNLOCKED_KEY, '1'); }catch(e){}
+  try{ sessionStorage.setItem(sessionUnlockedKey(), '1'); }catch(e){}
   markActiveNow();
   renderSettingsPanel();
 
@@ -2685,7 +2940,7 @@ function lockAppNow(){
   // clear the grace-window flag so even reopening a few seconds later
   // still shows the lock screen, unlike a normal background/foreground
   // cycle within the 10-minute window.
-  try{ sessionStorage.removeItem(SESSION_UNLOCKED_KEY); }catch(e){}
+  try{ sessionStorage.removeItem(sessionUnlockedKey()); }catch(e){}
   startLockFlow();
 }
 function isAppLocked(){
@@ -2975,6 +3230,16 @@ function wireEvents(){
 
   $('#lock-now-btn').addEventListener('click', lockAppNow);
   $('#settings-btn').addEventListener('click', ()=> showPanel('settings'));
+  $('#profile-btn').addEventListener('click', openProfile);
+  $('#profile-back').addEventListener('click', closeProfile);
+  $('#profile-save-btn').addEventListener('click', saveProfile);
+  $('#profile-switch-btn').addEventListener('click', switchAccount);
+  $('#profile-signout-btn').addEventListener('click', signOutCurrentAccount);
+  $('#profile-gender-chips').addEventListener('click', (e)=>{
+    const chip = e.target.closest('[data-chip]');
+    if(!chip) return;
+    $all('#profile-gender-chips .chip').forEach(c => c.classList.toggle('selected', c === chip));
+  });
 
   $all('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
 
@@ -3290,6 +3555,30 @@ function wireEvents(){
    INIT
    ========================================================================= */
 function init(){
+  // Which account is active decides whose namespaced data (DB.*) and whose
+  // PIN everything downstream even looks at, so nothing else runs until
+  // that's resolved. #auth-gate is already visible in the raw HTML (no
+  // "hidden" class), covering #lock underneath it, so there's no flash of
+  // the wrong screen while this decides which one actually applies.
+  if(!currentAccountId){
+    wireAuthGate();
+    registerServiceWorker();
+    return;
+  }
+  $('#auth-gate').classList.add('hidden');
+  initForAccount();
+  registerServiceWorker();
+}
+// forceLock: true whenever this follows a genuine Google sign-in (see
+// handleGoogleCredentialResponse) -- the 10-minute grace window is meant
+// for "you personally put the phone down for a few minutes," and has no
+// idea a DIFFERENT account might have been active in between. Signing
+// into an account is always a real, explicit action, so it always demands
+// that account's own PIN regardless of how recently it was last unlocked
+// — otherwise switching B -> A back within the window would silently hand
+// over A's data with no PIN at all, defeating the entire point of
+// per-account PINs on a shared device.
+function initForAccount(forceLock){
   const settings = DB.getSettings();
   applyTheme(settings.theme || 'auto');
 
@@ -3301,11 +3590,14 @@ function init(){
   wireEvents();
   renderAll();
   renderSettingsPanel();
+  renderProfileIcon();
   updateOfflineBanner();
-  if(shouldShowLockOnOpen()) startLockFlow(); else skipLockScreen();
+  if(forceLock || shouldShowLockOnOpen()) startLockFlow(); else skipLockScreen();
   markActiveNow();
   scheduleAllMedicines();
-
+  if(window.VitalsDrive) window.VitalsDrive.init();
+}
+function registerServiceWorker(){
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('service-worker.js').then(reg => {
       // Browsers only re-check a registered service worker for updates in
@@ -3345,7 +3637,6 @@ function init(){
       }
     });
   }
-  if(window.VitalsDrive) window.VitalsDrive.init();
 }
 
 if(document.readyState === 'loading'){

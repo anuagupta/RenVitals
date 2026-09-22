@@ -215,6 +215,15 @@ button{font-family:inherit;color:inherit;}
   background:radial-gradient(circle,color-mix(in srgb,var(--blue) 17%,transparent) 0%,transparent 70%);
 }
 .lock.hidden{display:none;}
+/* Sits on top of .lock (higher z-index) until an account is active — see
+   the comment on #auth-gate in index.html. */
+.auth-gate{z-index:210;}
+.google-signin-btn-wrap{margin-top:26px;min-height:44px;}
+.auth-gate-note{
+  font-size:11.5px;color:var(--text-dim-2);text-align:center;line-height:1.55;
+  margin:24px 0 0;max-width:280px;position:relative;
+}
+.auth-gate-error{font-size:12.5px;color:var(--danger);text-align:center;margin:10px 0 0;min-height:16px;position:relative;}
 .lock-icon{
   width:60px;height:60px;border-radius:20px;position:relative;
   background:linear-gradient(150deg,var(--surface-2),var(--surface));
@@ -269,6 +278,16 @@ button{font-family:inherit;color:inherit;}
   transition:transform .08s ease;
 }
 .theme-toggle:active{transform:scale(.93);}
+.profile-btn{padding:0;overflow:hidden;}
+.profile-btn-photo{width:100%;height:100%;object-fit:cover;border-radius:inherit;}
+.profile-photo-row{display:flex;justify-content:center;margin:6px 0 22px;}
+.profile-photo-lg{
+  width:84px;height:84px;border-radius:50%;overflow:hidden;flex-shrink:0;
+  background:linear-gradient(150deg,var(--surface-2),var(--surface));
+  border:1px solid var(--hairline-2);color:var(--text-dim);
+  display:flex;align-items:center;justify-content:center;
+}
+.profile-photo-lg img{width:100%;height:100%;object-fit:cover;}
 
 main{flex:1;min-height:0;overflow-y:auto;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
 
@@ -770,6 +789,11 @@ main:has(> #panel-home.active){overflow:hidden;}
   padding:16px 20px;border-radius:17px;cursor:pointer;
   background:transparent;border:1px solid color-mix(in srgb,var(--danger) 45%,transparent);
   color:var(--danger);font-family:var(--font-display);font-size:15px;font-weight:700;
+}
+.secondary-btn{
+  padding:16px 20px;border-radius:17px;cursor:pointer;
+  background:var(--surface);border:1px solid var(--hairline);
+  color:var(--text);font-family:var(--font-display);font-size:15px;font-weight:700;
 }
 
 .drive-link-form{display:flex;flex-direction:column;gap:9px;padding:4px 0 14px;}

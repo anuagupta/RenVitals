@@ -153,6 +153,9 @@ const TYPE_META = {
   sugar:  {label:'Sugar', sheetNoun:'sugar reading', colorClass:'white', colorVar:'--white', icon:ICONS.sugar, unit:'mg/dL'}
 };
 const PRESET_AMOUNTS = [100,150,200,250,300,350];
+// Fluid intake gets its own preset list (urine keeps PRESET_AMOUNTS as-is)
+// so a 1L bottle/jug is one tap away, and is the default quick-add amount.
+const PRESET_AMOUNTS_LIQUID = [100,150,200,250,300,350,1000];
 const DRINK_TYPES = ['Water','Tea','Coffee','Juice','Other'];
 const TONES = [['chime','Chime'],['bell','Bell'],['beep','Beep'],['silent','Silent']];
 const SUGAR_CONTEXTS = [['fasting','Fasting'],['before','Before meal'],['after','After meal']];
@@ -382,17 +385,49 @@ let medicinesListCollapsed = true;
 // parameters" — both start collapsed.
 let driveBackupCollapsed = true;
 let customMetricsCollapsed = true;
-// The app used to give itself a 2-minute grace window before re-locking
-// after being backgrounded (screen off, app switched away from, tab
-// hidden), so a quick app-switch wouldn't force re-authentication. In
-// practice that meant reopening the app within those 2 minutes — which is
-// most real "opens" — never showed the lock screen at all, so the
-// fingerprint prompt never had a lock screen to appear on. The app now
-// locks itself the instant it's backgrounded (see the visibilitychange
-// handler in wireEvents): both because a real PIN/biometric gate on
-// medical data shouldn't leave any grace window where someone else could
-// pick up an unlocked phone, and because that's what actually makes the
-// fingerprint prompt show up "on open" the way it's supposed to.
+// Locking instantly on every single backgrounding (no grace window at all)
+// turned out to be the wrong trade-off in practice: switching apps for a
+// few seconds, or a refresh, re-locked every time, and since re-locking is
+// what triggers the biometric auto-prompt, that prompt started popping up
+// dozens of times a day instead of feeling like a real "on open" gate.
+// Back to a grace window, just a much longer and more deliberate one than
+// before: reopening within 10 minutes of last being active, in the same
+// still-alive session, skips the lock screen entirely. Two things force a
+// real re-lock regardless of how little time has passed: an explicit "Lock
+// now" tap, and the app process actually having been killed and relaunched
+// (a force-close) — see shouldShowLockOnOpen below for how that's told
+// apart from a normal background/foreground cycle or a page refresh.
+const LOCK_IDLE_MS = 10 * 60 * 1000;
+const LAST_ACTIVE_KEY = 'vitals:lastActiveAt';
+// sessionStorage (not localStorage): survives a refresh or a normal
+// background/foreground cycle, but is cleared the moment the browsing
+// context is actually torn down -- which is what happens on a force-close,
+// and is the only web-visible signal that distinguishes one from the
+// other. A fresh session with this flag missing means either a genuine
+// first launch, or a relaunch after a force-close.
+const SESSION_UNLOCKED_KEY = 'vitals:sessionUnlocked';
+function markActiveNow(){
+  try{ localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now())); }catch(e){}
+}
+function shouldShowLockOnOpen(){
+  const settings = DB.getSettings();
+  if(!settings.pinHash) return true; // nothing set up yet -> always show the create-a-passcode flow
+  let sessionUnlocked = false;
+  try{ sessionUnlocked = sessionStorage.getItem(SESSION_UNLOCKED_KEY) === '1'; }catch(e){}
+  if(!sessionUnlocked) return true;
+  let lastActive = 0;
+  try{ lastActive = parseInt(localStorage.getItem(LAST_ACTIVE_KEY), 10) || 0; }catch(e){}
+  return (Date.now() - lastActive) >= LOCK_IDLE_MS;
+}
+// The counterpart to startLockFlow for when we've decided NOT to show the
+// lock screen (reopened well within the grace window) -- mirrors the tail
+// of unlockApp minus the Drive reconnect, which is deliberately reserved
+// for a real unlock gesture (PIN/biometric), not an automatic bypass.
+function skipLockScreen(){
+  $('#lock').classList.add('hidden');
+  pinBuffer = ''; pinFirstEntry = '';
+  renderSettingsPanel();
+}
 
 // Trends > tap-to-expand chart state
 let chartExpandType = null;
@@ -1077,14 +1112,15 @@ function fieldsHtmlFor(kind, existing){
   }
 
   if(kind === 'liquid' || kind === 'urine'){
-    const defaultAmt = existing ? existing.amount : (kind==='liquid'?250:200);
+    const defaultAmt = existing ? existing.amount : (kind==='liquid'?1000:200);
+    const presetAmounts = kind === 'liquid' ? PRESET_AMOUNTS_LIQUID : PRESET_AMOUNTS;
     const drinkField = kind === 'liquid' ? `
       <div class="field-label">What did you drink? <span style="text-transform:none;font-weight:400;">(optional)</span></div>
       <div class="chips" id="liquid-type-chips">${DRINK_TYPES.map(d=>
         `<div class="chip${(existing?existing.drink===d:d==='Water')?' selected':''}" data-chip>${d}</div>`).join('')}</div>` : '';
     return `
       <div class="field-label">Quick add</div>
-      <div class="chips" id="chip-row">${PRESET_AMOUNTS.map(amt=>
+      <div class="chips" id="chip-row">${presetAmounts.map(amt=>
         `<div class="chip${amt===defaultAmt?' selected':''}" data-chip>${amt} mL</div>`).join('')}</div>
       <div class="field-label">Custom amount</div>
       <div class="input-row"><input type="number" id="custom-amt" value="${defaultAmt}" inputmode="numeric"><span class="unit">mL</span></div>
@@ -2462,7 +2498,14 @@ function startLockFlow(){
   $('#lock').classList.remove('hidden');
   updateBiometricKeyVisibility();
   if(pendingUnlockAction === 'unlock' && settings.bioEnabled && settings.bioCredId && window.PublicKeyCredential && navigator.credentials){
-    setTimeout(()=>tryBiometricUnlock(true), 300);
+    // The lock screen used to snap straight to visible with the OS
+    // fingerprint sheet piling on top 300ms later — with no transition on
+    // either, that read as the sensor prompt just abruptly appearing out
+    // of nowhere. lock-in (styles.css) now gives the screen itself a brief
+    // settle-in; this waits for that to be most of the way done first, so
+    // there's a clear "this is what I need to do" beat before the OS
+    // prompt takes over.
+    setTimeout(()=>tryBiometricUnlock(true), 550);
     armBiometricAutoRetry();
   } else {
     disarmBiometricAutoRetry();
@@ -2546,6 +2589,8 @@ function unlockApp(){
   $('#lock').classList.add('hidden');
   pinBuffer = ''; pinFirstEntry = '';
   disarmBiometricAutoRetry();
+  try{ sessionStorage.setItem(SESSION_UNLOCKED_KEY, '1'); }catch(e){}
+  markActiveNow();
   renderSettingsPanel();
 
   // The one moment a fresh Drive authentication is allowed to happen
@@ -2558,16 +2603,15 @@ function unlockApp(){
   }
 }
 function lockAppNow(){
+  // An explicit "Lock now" always means "require real auth next time" --
+  // clear the grace-window flag so even reopening a few seconds later
+  // still shows the lock screen, unlike a normal background/foreground
+  // cycle within the 10-minute window.
+  try{ sessionStorage.removeItem(SESSION_UNLOCKED_KEY); }catch(e){}
   startLockFlow();
 }
 function isAppLocked(){
   return !$('#lock').classList.contains('hidden');
-}
-function lockIfConfigured(){
-  const settings = DB.getSettings();
-  if(!settings.pinHash) return; // nothing configured to lock behind
-  if(isAppLocked()) return;
-  lockAppNow();
 }
 
 function b64urlToBytes(b64url){
@@ -3133,16 +3177,23 @@ function wireEvents(){
 
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible'){
+      // Only actually re-lock if we've been away long enough (see
+      // shouldShowLockOnOpen) -- a quick app-switch within the grace
+      // window shouldn't interrupt anything already on screen.
+      if(!isAppLocked() && shouldShowLockOnOpen()) startLockFlow();
+      markActiveNow();
       checkMedicinesTick();
       if(window.VitalsDrive){
         if(window.VitalsDrive.syncNow) window.VitalsDrive.syncNow();
         if(window.VitalsDrive.flushQueue) window.VitalsDrive.flushQueue();
       }
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistration){
+        navigator.serviceWorker.getRegistration().then(reg => reg && reg.update()).catch(()=>{});
+      }
     } else {
-      // Screen off, app switched away from, or tab hidden — lock right
-      // away (lockIfConfigured no-ops if there's no PIN set or the lock
-      // screen is already showing).
-      lockIfConfigured();
+      // Screen off, app switched away from, or tab hidden — just record
+      // when, so the next reopen can tell how long we've been away.
+      markActiveNow();
     }
   });
 
@@ -3173,11 +3224,48 @@ function init(){
   renderAll();
   renderSettingsPanel();
   updateOfflineBanner();
-  startLockFlow();
+  if(shouldShowLockOnOpen()) startLockFlow(); else skipLockScreen();
+  markActiveNow();
   scheduleAllMedicines();
 
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('Vitals: SW registration failed', e));
+    navigator.serviceWorker.register('service-worker.js').then(reg => {
+      // Browsers only re-check a registered service worker for updates in
+      // the background at most about once every 24h. That's far too slow
+      // for how often this app gets updated -- someone could keep running
+      // yesterday's CSS/JS for a long time after a real fix has shipped,
+      // which looks exactly like "the fix didn't work" on their phone even
+      // though it's already live. Ask explicitly right away too.
+      reg.update().catch(()=>{});
+    }).catch(e=>console.warn('Vitals: SW registration failed', e));
+
+    // skipWaiting + clients.claim (service-worker.js) make a new worker
+    // take over immediately, but the page's already-loaded JS/CSS doesn't
+    // refresh on its own until something reloads it.
+    let swRefreshPending = false;
+    function reloadForServiceWorkerUpdate(){
+      if(swRefreshPending) return;
+      swRefreshPending = true;
+      window.location.reload();
+    }
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      const sheet = $('#sheet');
+      if(sheet && sheet.classList.contains('show')){
+        // Don't yank an in-progress entry out from under someone -- wait
+        // for the app to go to the background again (a safe moment, since
+        // nothing on screen is actively being typed into at that point)
+        // rather than forcing the reload immediately.
+        const onHide = () => {
+          if(document.visibilityState === 'hidden'){
+            document.removeEventListener('visibilitychange', onHide);
+            reloadForServiceWorkerUpdate();
+          }
+        };
+        document.addEventListener('visibilitychange', onHide);
+      } else {
+        reloadForServiceWorkerUpdate();
+      }
+    });
   }
   if(window.VitalsDrive) window.VitalsDrive.init();
 }

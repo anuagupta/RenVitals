@@ -72,9 +72,26 @@ const DOSELOG_HEADER_ROW = [
   'Deleted'
 ];
 
-const ACCESS_TOKEN_KEY = 'vitals:drive:accessToken';
-const TOKEN_EXPIRY_KEY = 'vitals:drive:tokenExpiry';
-const LAST_SYNC_KEY = 'vitals:drive:lastSyncAt';
+/*
+ * Every one of this module's persisted keys (access token, its expiry, the
+ * linked spreadsheet, the last-sync time, the "ever authorized" flag) is
+ * namespaced per Google account — window.VitalsAccount (app.js) exposes
+ * whichever one is currently signed in. Without this, more than one
+ * person's data on the same device would all sync through the SAME Drive
+ * connection, mixing one person's entries into another's linked Sheet.
+ * These are functions, not constants, because the active account can
+ * change during the page's lifetime (switching accounts, signing out).
+ */
+function acctDrivePrefix(){
+  const id = window.VitalsAccount && window.VitalsAccount.getCurrentId && window.VitalsAccount.getCurrentId();
+  return id ? `vitals:drive:acct:${id}:` : 'vitals:drive:';
+}
+function accessTokenKey(){ return acctDrivePrefix() + 'accessToken'; }
+function tokenExpiryKey(){ return acctDrivePrefix() + 'tokenExpiry'; }
+function spreadsheetIdKey(){ return acctDrivePrefix() + 'spreadsheetId'; }
+function lastSyncKey(){ return acctDrivePrefix() + 'lastSyncAt'; }
+function authorizedKey(){ return acctDrivePrefix() + 'authorized'; }
+function queueKey(){ return acctDrivePrefix() + 'queue'; }
 
 let tokenClient = null;
 
@@ -89,26 +106,14 @@ let tokenClient = null;
  * actually expired yet. A real Google round-trip is then only needed
  * roughly once an hour (when the token genuinely expires), not on every
  * refresh/visibility-change/app-reopen.
+ *
+ * These start at safe empty defaults, NOT read from storage here — at the
+ * time this script first runs, no account has been resolved yet (that
+ * happens later, in app.js's auth gate). loadDriveStateForCurrentAccount
+ * below does the real restore, called once an account is actually active.
  */
-let accessToken =
-  localStorage.getItem(ACCESS_TOKEN_KEY) || null;
-
-let tokenExpiry =
-  Number(localStorage.getItem(TOKEN_EXPIRY_KEY)) || 0;
-
-if(
-  accessToken &&
-  Date.now() >= tokenExpiry - 30000
-){
-
-  // Stored token is already expired (or expires almost immediately) —
-  // don't trust it.
-  accessToken = null;
-  tokenExpiry = 0;
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(TOKEN_EXPIRY_KEY);
-
-}
+let accessToken = null;
+let tokenExpiry = 0;
 
 function setAccessToken(token, expiresInSeconds){
 
@@ -118,8 +123,8 @@ function setAccessToken(token, expiresInSeconds){
     Date.now() +
     ((expiresInSeconds || 3600) * 1000);
 
-  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-  localStorage.setItem(TOKEN_EXPIRY_KEY, String(tokenExpiry));
+  localStorage.setItem(accessTokenKey(), accessToken);
+  localStorage.setItem(tokenExpiryKey(), String(tokenExpiry));
 
 }
 
@@ -128,14 +133,13 @@ function clearAccessToken(){
   accessToken = null;
   tokenExpiry = 0;
 
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(TOKEN_EXPIRY_KEY);
+  localStorage.removeItem(accessTokenKey());
+  localStorage.removeItem(tokenExpiryKey());
 
 }
 
 
-let spreadsheetId =
-  localStorage.getItem('vitals:drive:spreadsheetId') || null;
+let spreadsheetId = null;
 
 let flushing = false;
 let syncing = false;
@@ -153,7 +157,7 @@ let authRestoreStarted = false;
  * States: 'disconnected' | 'authenticating' | 'connected' | 'syncing' | 'error'
  * =========================================================================
  */
-let driveState = accessToken ? 'connected' : 'disconnected';
+let driveState = 'disconnected';
 
 // Automatic (non-user-initiated) silent-restore attempts are throttled so
 // that page refreshes, visibility changes and 'online' events happening in
@@ -170,12 +174,34 @@ const AUTO_AUTH_COOLDOWN_MS = 5 * 60 * 1000;
 // Restored from storage (like the access token) so Settings can show an
 // accurate "Last synced …" time immediately after a refresh, instead of
 // going blank until the next sync completes in this session.
-let lastSyncCompletedAt =
-  Number(localStorage.getItem(LAST_SYNC_KEY)) || 0;
+let lastSyncCompletedAt = 0;
 const MIN_SYNC_INTERVAL_MS = 20 * 1000;
 
 function setState(next){
   driveState = next;
+}
+
+/*
+ * Populates accessToken/tokenExpiry/spreadsheetId/lastSyncCompletedAt/
+ * driveState from the CURRENTLY active account's namespaced keys — this is
+ * the real "restore on load" step that the old module-level initializers
+ * used to do directly; it now has to be called explicitly (from init(),
+ * below) because at the time this script first evaluates, no account has
+ * been resolved yet.
+ */
+function loadDriveStateForCurrentAccount(){
+  accessToken = localStorage.getItem(accessTokenKey()) || null;
+  tokenExpiry = Number(localStorage.getItem(tokenExpiryKey())) || 0;
+  if(accessToken && Date.now() >= tokenExpiry - 30000){
+    // Stored token is already expired (or expires almost immediately) — don't trust it.
+    accessToken = null;
+    tokenExpiry = 0;
+    localStorage.removeItem(accessTokenKey());
+    localStorage.removeItem(tokenExpiryKey());
+  }
+  spreadsheetId = localStorage.getItem(spreadsheetIdKey()) || null;
+  lastSyncCompletedAt = Number(localStorage.getItem(lastSyncKey())) || 0;
+  driveState = accessToken ? 'connected' : 'disconnected';
 }
 
 
@@ -301,7 +327,7 @@ function requestToken(promptMode){
            * the application.
            */
           localStorage.setItem(
-            'vitals:drive:authorized',
+            authorizedKey(),
             '1'
           );
 
@@ -352,7 +378,7 @@ async function restoreAuthorizedSession(){
 
   if(
     localStorage.getItem(
-      'vitals:drive:authorized'
+      authorizedKey()
     ) !== '1'
   ){
 
@@ -469,7 +495,7 @@ async function reconnectIfNeeded(){
 
 function hasStoredAuthorization(){
 
-  return localStorage.getItem('vitals:drive:authorized') === '1';
+  return localStorage.getItem(authorizedKey()) === '1';
 
 }
 
@@ -574,7 +600,7 @@ function disconnect(){
   clearAccessToken();
 
   localStorage.removeItem(
-    'vitals:drive:authorized'
+    authorizedKey()
   );
 
   setState('disconnected');
@@ -930,7 +956,7 @@ async function linkToExistingSpreadsheet(input){
   spreadsheetId = metadata.spreadsheetId;
 
   localStorage.setItem(
-    'vitals:drive:spreadsheetId',
+    spreadsheetIdKey(),
     spreadsheetId
   );
 
@@ -1154,7 +1180,7 @@ async function ensureSpreadsheetReady(){
       await findOrCreateSheet();
 
     localStorage.setItem(
-      'vitals:drive:spreadsheetId',
+      spreadsheetIdKey(),
       spreadsheetId
     );
 
@@ -2476,7 +2502,7 @@ async function syncNow(force){
       Date.now();
 
     localStorage.setItem(
-      LAST_SYNC_KEY,
+      lastSyncKey(),
       String(lastSyncCompletedAt)
     );
 
@@ -2539,7 +2565,7 @@ function getQueue(){
 
     return JSON.parse(
       localStorage.getItem(
-        'vitals:drive:queue'
+        queueKey()
       ) || '[]'
     );
 
@@ -2555,7 +2581,7 @@ function getQueue(){
 function saveQueue(queue){
 
   localStorage.setItem(
-    'vitals:drive:queue',
+    queueKey(),
     JSON.stringify(queue)
   );
 
@@ -3170,7 +3196,46 @@ window.addEventListener(
 
 window.VitalsDrive = {
 
+  // Same OAuth client used for the Drive connection, reused by app.js for
+  // the separate Google Sign-In identity flow (profile name/email/photo) —
+  // one registered client covers both, no second Google Cloud setup needed.
+  GOOGLE_CLIENT_ID: DRIVE_CONFIG.CLIENT_ID,
+
+  // Called once, only for the very first Google account ever signed into
+  // on a given device (see migrateLegacyDataToAccount in app.js) — carries
+  // over a pre-existing, not-yet-namespaced Drive connection (if any) so
+  // reconnecting isn't needed just because accounts now exist.
+  migrateLegacyConnection(acctId){
+    ['accessToken','tokenExpiry','spreadsheetId','lastSyncAt','authorized','queue'].forEach(k => {
+      const legacyKey = 'vitals:drive:' + k;
+      const raw = localStorage.getItem(legacyKey);
+      if(raw != null){
+        localStorage.setItem(`vitals:drive:acct:${acctId}:${k}`, raw);
+        localStorage.removeItem(legacyKey);
+      }
+    });
+  },
+
+  // Permanently removes one account's Drive connection state (its own
+  // access token, linked spreadsheet, etc.) — called by app.js's sign-out,
+  // which deletes that account's data from this device entirely.
+  wipeAccountConnection(acctId){
+    const prefix = `vitals:drive:acct:${acctId}:`;
+    const toRemove = [];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.indexOf(prefix) === 0) toRemove.push(k);
+    }
+    toRemove.forEach(k => localStorage.removeItem(k));
+  },
+
   init(){
+
+    // Restore accessToken/spreadsheetId/etc. for whichever account is
+    // active right now — see loadDriveStateForCurrentAccount above for why
+    // this can't just happen at module-load time the way it used to.
+    loadDriveStateForCurrentAccount();
+    notifyStatus();
 
     /*
      * Background sync approximately once per minute. syncNow() is a cheap

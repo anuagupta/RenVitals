@@ -197,13 +197,33 @@ button{font-family:inherit;color:inherit;}
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   padding:30px 24px calc(30px + env(safe-area-inset-bottom));
   max-width:480px;margin:0 auto;
+  animation:lockFadeIn .3s ease-out;
 }
+@keyframes lockFadeIn{from{opacity:0;}to{opacity:1;}}
+/* Fingerprint/Face auto-prompt fires a beat after this (see startLockFlow
+   in app.js) -- without a settle-in like this the screen used to snap
+   straight to visible with the OS sensor sheet piling on top almost
+   instantly, which read as that prompt just abruptly appearing out of
+   nowhere rather than "the app is asking you to unlock it." */
+@keyframes lockContentIn{from{opacity:0;transform:translateY(10px) scale(.94);}to{opacity:1;transform:none;}}
+.lock-icon{animation:lockContentIn .4s cubic-bezier(.2,.9,.3,1) backwards;}
+.lock-title{animation:lockContentIn .4s cubic-bezier(.2,.9,.3,1) .05s backwards;}
+.lock-sub{animation:lockContentIn .4s cubic-bezier(.2,.9,.3,1) .1s backwards;}
 .lock::before{
   content:"";position:absolute;top:12%;left:50%;transform:translateX(-50%);
   width:min(78vw,300px);height:min(78vw,300px);border-radius:50%;pointer-events:none;
   background:radial-gradient(circle,color-mix(in srgb,var(--blue) 17%,transparent) 0%,transparent 70%);
 }
 .lock.hidden{display:none;}
+/* Sits on top of .lock (higher z-index) until an account is active — see
+   the comment on #auth-gate in index.html. */
+.auth-gate{z-index:210;}
+.google-signin-btn-wrap{margin-top:26px;min-height:44px;}
+.auth-gate-note{
+  font-size:11.5px;color:var(--text-dim-2);text-align:center;line-height:1.55;
+  margin:24px 0 0;max-width:280px;position:relative;
+}
+.auth-gate-error{font-size:12.5px;color:var(--danger);text-align:center;margin:10px 0 0;min-height:16px;position:relative;}
 .lock-icon{
   width:60px;height:60px;border-radius:20px;position:relative;
   background:linear-gradient(150deg,var(--surface-2),var(--surface));
@@ -258,6 +278,16 @@ button{font-family:inherit;color:inherit;}
   transition:transform .08s ease;
 }
 .theme-toggle:active{transform:scale(.93);}
+.profile-btn{padding:0;overflow:hidden;}
+.profile-btn-photo{width:100%;height:100%;object-fit:cover;border-radius:inherit;}
+.profile-photo-row{display:flex;justify-content:center;margin:6px 0 22px;}
+.profile-photo-lg{
+  width:84px;height:84px;border-radius:50%;overflow:hidden;flex-shrink:0;
+  background:linear-gradient(150deg,var(--surface-2),var(--surface));
+  border:1px solid var(--hairline-2);color:var(--text-dim);
+  display:flex;align-items:center;justify-content:center;
+}
+.profile-photo-lg img{width:100%;height:100%;object-fit:cover;}
 
 main{flex:1;min-height:0;overflow-y:auto;padding:0 20px calc(104px + env(safe-area-inset-bottom));}
 
@@ -301,7 +331,6 @@ main:has(> #panel-home.active){overflow:hidden;}
 }
 .card[data-size="full"],.card[data-size="full-tall"]{grid-column:1 / -1;}
 .card[data-size="tall"],.card[data-size="full-tall"]{grid-row:span 2;}
-@keyframes sheenSweep{0%,72%{background-position:-160% -160%;}92%,100%{background-position:60% 60%;}}
 /* Tiles settle in on the very first Home render only (see homeGridAnimated
    in app.js) — a one-time flourish, not replayed on every data refresh. */
 @keyframes tileIn{from{opacity:0;transform:translateY(10px) scale(.95);}to{opacity:1;transform:none;}}
@@ -429,13 +458,6 @@ main:has(> #panel-home.active){overflow:hidden;}
   border:1px solid var(--tile-glass-edge);margin-bottom:11px;
   box-shadow:var(--shadow), inset 0 1.5px 0 var(--tile-glass-sheen);
 }
-.trend-card::after{
-  content:'';position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;border-radius:inherit;
-  background:linear-gradient(75deg,transparent 40%,var(--tile-glass-sheen) 48%,rgba(255,255,255,.22) 50%,var(--tile-glass-sheen) 52%,transparent 60%);
-  background-size:260% 260%;background-position:-160% -160%;
-  animation:sheenSweep 11s cubic-bezier(.3,.1,.2,1) infinite;
-}
-@media (prefers-reduced-motion: reduce){ .trend-card::after{animation:none;} }
 .trend-card > *{position:relative;z-index:1;}
 .trend-card[data-open-chart]{cursor:pointer;transition:transform .1s ease;}
 .trend-card[data-open-chart]:active{transform:scale(.985);}
@@ -767,6 +789,11 @@ main:has(> #panel-home.active){overflow:hidden;}
   padding:16px 20px;border-radius:17px;cursor:pointer;
   background:transparent;border:1px solid color-mix(in srgb,var(--danger) 45%,transparent);
   color:var(--danger);font-family:var(--font-display);font-size:15px;font-weight:700;
+}
+.secondary-btn{
+  padding:16px 20px;border-radius:17px;cursor:pointer;
+  background:var(--surface);border:1px solid var(--hairline);
+  color:var(--text);font-family:var(--font-display);font-size:15px;font-weight:700;
 }
 
 .drive-link-form{display:flex;flex-direction:column;gap:9px;padding:4px 0 14px;}

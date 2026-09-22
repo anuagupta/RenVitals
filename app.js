@@ -372,6 +372,50 @@ let pendingUnlockAction = null;
 let pinBuffer = '';
 let pinFirstEntry = '';
 
+/* ---------------------------------------------------------------------
+   Back-button / history integration for in-app overlays
+   This is a single-page app — the day-detail view, expanded chart, log/
+   edit sheet, medicine history, medicine import, and confirm dialogs are
+   all just DOM state, not real navigations. Without a history entry to go
+   back to, the phone's hardware/gesture back button has nothing of ours to
+   act on and falls straight through to exiting the app, rather than just
+   closing whatever's open — exactly the bug reported for the day-detail
+   view and the expanded Trends chart.
+
+   Fix: every overlay pushes one history entry when it opens (pushOverlayState,
+   called with a same-open DOM-only "close" function), and every way of
+   closing it — an in-app back/X tap, the scrim, Cancel, or a successful
+   Save — calls consumeOverlayState() in addition to its own DOM-closing
+   work, so the browser's history stack and what's actually on screen never
+   drift apart. Overlays that can stack (e.g. editing an entry opens the
+   sheet on top of the still-open day-detail view) unwind one at a time,
+   in the right order, because each pushed a separate entry.
+   --------------------------------------------------------------------- */
+let overlayCloseStack = [];
+let ignoreNextPopstate = false;
+function pushOverlayState(closeFn){
+  overlayCloseStack.push(closeFn);
+  history.pushState({ vitalsOverlay: overlayCloseStack.length }, '', '');
+}
+// Called from the same code path that visually closes an overlay (whichever
+// of its triggers fired), never from the popstate handler itself — see the
+// comment above for why those two cases need to behave differently.
+function consumeOverlayState(){
+  if(!overlayCloseStack.length) return;
+  overlayCloseStack.pop();
+  ignoreNextPopstate = true;
+  history.back();
+}
+window.addEventListener('popstate', ()=>{
+  if(ignoreNextPopstate){ ignoreNextPopstate = false; return; }
+  // A real back-button/gesture press, not one we triggered ourselves —
+  // close whatever overlay is on top. The registered function only flips
+  // DOM/local state; it must NOT call consumeOverlayState itself, since the
+  // browser has already consumed this history entry by firing this event.
+  const closeFn = overlayCloseStack.pop();
+  if(closeFn) closeFn();
+});
+
 // Settings > Tab colors is collapsible and always starts collapsed each
 // time you navigate INTO Settings (see showPanel below) — this flag just
 // tracks whatever you've toggled it to since then, so re-rendering the
@@ -1181,12 +1225,17 @@ function openSheet(kind, editId){
 
   $('#scrim').classList.add('show');
   $('#sheet').classList.add('show');
+  pushOverlayState(closeSheetDom);
 }
-function closeSheet(){
+function closeSheetDom(){
   $('#scrim').classList.remove('show');
   $('#sheet').classList.remove('show');
   currentSheetKind = null;
   currentEditId = null;
+}
+function closeSheet(){
+  closeSheetDom();
+  consumeOverlayState();
 }
 function attachCustomAmountSync(){
   const customInput = $('#custom-amt');
@@ -1456,7 +1505,7 @@ function showConfirmDialog(title, body){
     $('#confirm-modal-body').textContent = body;
 
     let settled = false;
-    function finish(result){
+    function finishDom(result){
       if(settled) return;
       settled = true;
       scrim.classList.remove('show');
@@ -1466,8 +1515,8 @@ function showConfirmDialog(title, body){
       scrim.removeEventListener('click', onCancel);
       resolve(result);
     }
-    function onConfirm(){ finish(true); }
-    function onCancel(){ finish(false); }
+    function onConfirm(){ finishDom(true); consumeOverlayState(); }
+    function onCancel(){ finishDom(false); consumeOverlayState(); }
 
     $('#confirm-modal-confirm').addEventListener('click', onConfirm);
     $('#confirm-modal-cancel').addEventListener('click', onCancel);
@@ -1475,6 +1524,11 @@ function showConfirmDialog(title, body){
 
     scrim.classList.add('show');
     modal.classList.add('show');
+    // Only ever invoked by the popstate handler on a genuine back-button
+    // press — treat that the same as tapping Cancel, but skip straight to
+    // finishDom since the browser already consumed the history entry by
+    // navigating back to fire that event in the first place.
+    pushOverlayState(() => finishDom(false));
   });
 }
 
@@ -1606,6 +1660,10 @@ function dayNavLabel(ts){
   return new Date(ts).toLocaleDateString([], {weekday:'short', day:'numeric', month:'short'});
 }
   function openDetail(type, dateTs){
+  // Also called re-entrantly (day-nav, jumping to a date, a background
+  // data refresh while already open) to just update what's on screen —
+  // only push a new history entry on the actual closed-to-open transition.
+  const wasOpen = $('#detail').classList.contains('show');
   currentDetailType = type;
   currentDetailDate = startOfDay(dateTs != null ? dateTs : Date.now());
   const meta = getMetricMeta(type);
@@ -1635,6 +1693,7 @@ function dayNavLabel(ts){
     : `<p class="empty-hint">No entries logged ${onToday ? 'today' : 'on this day'}.</p>`;
 
   $('#detail').classList.add('show');
+  if(!wasOpen) pushOverlayState(closeDetailDom);
 }
 function detailHeaderValue(type, dayEntries, meta, onToday){
   if(!dayEntries.length) return onToday ? 'No entries today' : 'No entries';
@@ -1653,10 +1712,14 @@ function shiftDetailDay(deltaDays){
   if(startOfDay(d.getTime()) > startOfDay(Date.now())) return;
   openDetail(currentDetailType, d.getTime());
 }
-function closeDetail(){
+function closeDetailDom(){
   $('#detail').classList.remove('show');
   currentDetailType = null;
   currentDetailDate = null;
+}
+function closeDetail(){
+  closeDetailDom();
+  consumeOverlayState();
 }
 
 /* =========================================================================
@@ -1811,11 +1874,16 @@ function openChartExpand(type){
   renderExpandedChart();
   resetChartZoom();
   $('#chart-expand').classList.add('show');
+  pushOverlayState(closeChartExpandDom);
 }
-function closeChartExpand(){
+function closeChartExpandDom(){
   $('#chart-expand').classList.remove('show');
   chartExpandType = null;
   clearTimeout(chartWheelExpandTimer);
+}
+function closeChartExpand(){
+  closeChartExpandDom();
+  consumeOverlayState();
 }
 
 function renderExpandedChart(){
@@ -2238,11 +2306,16 @@ function openMedicineHistory(medId){
   currentHistoryDate = startOfDay(Date.now());
   renderMedicineHistoryDay();
   $('#medicine-history').classList.add('show');
+  pushOverlayState(closeMedicineHistoryDom);
 }
-function closeMedicineHistory(){
+function closeMedicineHistoryDom(){
   $('#medicine-history').classList.remove('show');
   currentHistoryMedId = null;
   currentHistoryDate = null;
+}
+function closeMedicineHistory(){
+  closeMedicineHistoryDom();
+  consumeOverlayState();
 }
 function renderMedicineHistoryDay(){
   if(!currentHistoryMedId) return;
@@ -2336,9 +2409,14 @@ function openMedicineImport(){
   status.textContent = '';
   status.className = 'settings-sub';
   $('#medicine-import').classList.add('show');
+  pushOverlayState(closeMedicineImportDom);
+}
+function closeMedicineImportDom(){
+  $('#medicine-import').classList.remove('show');
 }
 function closeMedicineImport(){
-  $('#medicine-import').classList.remove('show');
+  closeMedicineImportDom();
+  consumeOverlayState();
 }
 function importMedicinesFromText(){
   const textarea = $('#medicine-import-text');

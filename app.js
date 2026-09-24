@@ -2719,25 +2719,40 @@ async function handleGoogleCredentialResponse(response){
 function wireAuthGate(){
   const err = $('#auth-gate-error');
   if(err) err.textContent = '';
-  if(!window.google || !window.google.accounts || !window.google.accounts.id){
-    if(err) err.textContent = "Couldn't load Google Sign-In — check your connection and reload.";
-    return;
-  }
   const clientId = window.VitalsDrive && window.VitalsDrive.GOOGLE_CLIENT_ID;
   if(!clientId){
     if(err) err.textContent = 'Google Sign-In is not configured.';
     return;
   }
-  google.accounts.id.initialize({
-    client_id: clientId,
-    callback: handleGoogleCredentialResponse,
-    auto_select: false
-  });
-  const btn = $('#google-signin-btn');
-  if(btn){
-    btn.innerHTML = '';
-    google.accounts.id.renderButton(btn, { theme:'outline', size:'large', shape:'pill', width:280 });
+  // The Google Identity Services script loads async from accounts.google.com,
+  // so it may not be ready yet at this exact moment - especially on a slower
+  // connection or a phone that hasn't talked to that domain before. Poll for
+  // it instead of failing on the first check; only give up after a real
+  // timeout so a genuinely blocked/offline connection still gets an error.
+  let attempts = 0;
+  const maxAttempts = 40; // ~10s at 250ms
+  function tryInit(){
+    if(window.google && window.google.accounts && window.google.accounts.id){
+      google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredentialResponse,
+        auto_select: false
+      });
+      const btn = $('#google-signin-btn');
+      if(btn){
+        btn.innerHTML = '';
+        google.accounts.id.renderButton(btn, { theme:'outline', size:'large', shape:'pill', width:280 });
+      }
+      return;
+    }
+    attempts++;
+    if(attempts >= maxAttempts){
+      if(err) err.textContent = "Couldn't load Google Sign-In — check your connection and reload.";
+      return;
+    }
+    setTimeout(tryInit, 250);
   }
+  tryInit();
 }
 
 /* =========================================================================

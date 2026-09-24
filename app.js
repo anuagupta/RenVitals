@@ -3111,6 +3111,36 @@ function updateOfflineBanner(){
   if(!banner) return;
   banner.classList.toggle('show', !navigator.onLine);
 }
+const IOS_INSTALL_DISMISSED_KEY = 'vitals:iosInstallBannerDismissed';
+function isIosDevice(){
+  // iPhone/iPod report plainly; iPadOS 13+ disguises itself as a Mac in the
+  // UA string but is still touch-capable, unlike an actual Mac.
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function isRunningStandalone(){
+  return window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true;
+}
+function initIosInstallBanner(){
+  const banner = $('#ios-install-banner');
+  if(!banner) return;
+  const dismissBtn = $('#ios-install-dismiss');
+  if(dismissBtn){
+    dismissBtn.addEventListener('click', () => {
+      banner.classList.remove('show');
+      try{ localStorage.setItem(IOS_INSTALL_DISMISSED_KEY, '1'); }catch(e){}
+    });
+  }
+  // iOS has no beforeinstallprompt API at all - there is no native "Install"
+  // button to hook into like there is on Chrome/Android - so this banner is
+  // the only way to tell an iPhone/iPad user the feature exists at all.
+  if(!isIosDevice() || isRunningStandalone()) return;
+  let dismissed = false;
+  try{ dismissed = localStorage.getItem(IOS_INSTALL_DISMISSED_KEY) === '1'; }catch(e){}
+  if(dismissed) return;
+  banner.classList.add('show');
+}
 function formatRelativeShort(ts){
   if(!ts) return '';
   const diffSec = Math.max(0, Math.floor((Date.now()-ts)/1000));
@@ -3570,6 +3600,10 @@ function wireEvents(){
    INIT
    ========================================================================= */
 function init(){
+  // Independent of sign-in/lock state (it has its own high z-index so it
+  // shows above the auth gate and lock screen too) - an iPhone user should
+  // see this on their very first visit, before they've signed into anything.
+  initIosInstallBanner();
   // Which account is active decides whose namespaced data (DB.*) and whose
   // PIN everything downstream even looks at, so nothing else runs until
   // that's resolved. #auth-gate is already visible in the raw HTML (no

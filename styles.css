@@ -811,6 +811,30 @@ main:has(> #panel-home.active){overflow:hidden;}
 .offline-banner svg{flex-shrink:0;color:var(--yellow);}
 .offline-banner.show{display:flex;}
 
+/* iOS has no native "install this app" prompt (unlike Chrome/Android), so
+   this stands in for it: a dismissible strip pointing at the Share sheet,
+   shown only on iOS/iPadOS browsers that aren't already running installed. */
+.ios-install-banner{
+  position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(140%);
+  width:min(calc(100% - 34px),446px);z-index:300;
+  display:flex;align-items:center;gap:10px;
+  padding:12px 14px;border-radius:18px;
+  background:var(--glass);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+  border:1px solid var(--glass-edge);box-shadow:var(--shadow);
+  color:var(--text);font-family:var(--font-body);font-size:12.5px;line-height:1.4;
+  transition:transform .3s cubic-bezier(.2,.9,.3,1);
+}
+.ios-install-banner.show{transform:translateX(-50%) translateY(0);}
+.ios-install-banner svg{flex-shrink:0;color:var(--blue);}
+.ios-install-banner span{flex:1;}
+.ios-install-banner strong{font-weight:700;}
+.ios-install-dismiss{
+  flex-shrink:0;width:24px;height:24px;border-radius:50%;border:none;
+  background:var(--surface-2);color:var(--text-dim-2);
+  font-size:12px;line-height:1;cursor:pointer;
+}
+
 /* =========================================================================
    CONFIRM DIALOG
    ========================================================================= */

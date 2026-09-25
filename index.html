@@ -23,7 +23,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=16">
+<link rel="stylesheet" href="styles.css?v=17">
 </head>
 <body>
 
@@ -427,8 +427,14 @@
 
 </div>
 
+<div class="ios-install-banner" id="ios-install-banner">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg>
+  <span>Install Vitals: tap <strong>Share</strong>, then "Add to Home Screen"</span>
+  <button class="ios-install-dismiss" id="ios-install-dismiss" type="button" aria-label="Dismiss">✕</button>
+</div>
+
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="drive.js?v=6"></script>
-<script src="app.js?v=27"></script>
+<script src="app.js?v=28"></script>
 </body>
 </html>

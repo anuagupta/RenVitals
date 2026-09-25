@@ -1010,7 +1010,13 @@ function repeatDaysText(obj){
 function renderHeader(){
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  $('#greeting').textContent = greeting;
+  const acct = getCurrentAccount();
+  // acct.name falls back to the raw email address when Google's token has
+  // no name claim (see handleGoogleCredentialResponse) - fine for the
+  // profile page, but "Good morning, someone@example.com" reads wrong here.
+  const hasRealName = acct && acct.name && acct.name !== acct.email;
+  const firstName = hasRealName ? acct.name.trim().split(/\s+/)[0] : '';
+  $('#greeting').textContent = firstName ? `${greeting}, ${firstName}` : greeting;
   $('#today-date').textContent = formatDateHeader(new Date());
 }
 
@@ -2811,6 +2817,7 @@ function saveProfile(){
     gender: selectedChip ? selectedChip.dataset.gender : null,
     age: ageVal !== '' ? Math.max(0, Math.min(130, parseInt(ageVal, 10) || 0)) : null
   });
+  renderHeader();
   closeProfile();
 }
 

@@ -2,14 +2,15 @@
 
 /* =========================================================================
    Vitals — drive.js
-   Two-way Google Drive / Google Sheets synchronization.
+   Google Drive / Sheets backup with explicit restore and sheet linking.
 
    IMPORTANT:
    - Sheet1 stores health entries.
    - Metrics stores custom metric definitions (Weight, Serum Creatinine, etc.).
-   - Sync is ID/timestamp based and is designed to be idempotent.
-   - Custom metric IDs are normalized by metric name so duplicate tiles do not
-     multiply when two devices have the same metric under different IDs.
+   - Medicines stores schedules; DoseLog stores taken/skipped marks.
+   - Automatic sync pushes local records; Restore/linking imports remote records.
+   - Offline queue operations keep stable IDs and deletion markers.
+   - Duplicate local metric names are handled by app.js at account startup.
    ========================================================================= */
 
 const DRIVE_CONFIG = {
@@ -69,7 +70,9 @@ const DOSELOG_HEADER_ROW = [
   'Time',
   'Status',
   'UpdatedAt',
-  'Deleted'
+  'Deleted',
+  'MedicineName',
+  'MedicineDose'
 ];
 
 /*
@@ -123,8 +126,8 @@ function setAccessToken(token, expiresInSeconds){
     Date.now() +
     ((expiresInSeconds || 3600) * 1000);
 
-  localStorage.setItem(accessTokenKey(), accessToken);
-  localStorage.setItem(tokenExpiryKey(), String(tokenExpiry));
+  sessionStorage.setItem(accessTokenKey(), accessToken);
+  sessionStorage.setItem(tokenExpiryKey(), String(tokenExpiry));
 
 }
 
@@ -133,7 +136,9 @@ function clearAccessToken(){
   accessToken = null;
   tokenExpiry = 0;
 
+  sessionStorage.removeItem(accessTokenKey());
   localStorage.removeItem(accessTokenKey());
+  sessionStorage.removeItem(tokenExpiryKey());
   localStorage.removeItem(tokenExpiryKey());
 
 }
@@ -150,9 +155,9 @@ let authRestoreStarted = false;
  * CONNECTION STATE MACHINE
  *
  * drive.js is the single owner of Drive authentication and connection
- * state. app.js only ever calls signIn() / disconnect() / syncNow() and
- * reads status via the 'vitals-drive-status' event or getState() — it
- * never talks to Google Identity Services directly.
+ * state. app.js uses the public API below and observes 'vitals-drive-status'.
+ * The separate account identity flow in app.js also uses Google Identity
+ * Services; Drive authorization remains owned by this module.
  *
  * States: 'disconnected' | 'authenticating' | 'connected' | 'syncing' | 'error'
  * =========================================================================
@@ -190,8 +195,15 @@ function setState(next){
  * been resolved yet.
  */
 function loadDriveStateForCurrentAccount(){
-  accessToken = localStorage.getItem(accessTokenKey()) || null;
-  tokenExpiry = Number(localStorage.getItem(tokenExpiryKey())) || 0;
+  // Migrate a previously persisted token into session-only storage once.
+  accessToken = sessionStorage.getItem(accessTokenKey()) || localStorage.getItem(accessTokenKey()) || null;
+  tokenExpiry = Number(sessionStorage.getItem(tokenExpiryKey()) || localStorage.getItem(tokenExpiryKey())) || 0;
+  if(accessToken){
+    sessionStorage.setItem(accessTokenKey(), accessToken);
+    sessionStorage.setItem(tokenExpiryKey(), String(tokenExpiry));
+  }
+  localStorage.removeItem(accessTokenKey());
+  localStorage.removeItem(tokenExpiryKey());
   if(accessToken && Date.now() >= tokenExpiry - 30000){
     // Stored token is already expired (or expires almost immediately) — don't trust it.
     accessToken = null;
@@ -408,13 +420,14 @@ async function restoreAuthorizedSession(){
   authRestoreStarted = true;
 
   setState('authenticating');
+  notifyStatus();
 
   try{
 
     /*
      * Silent restoration — 'none' guarantees Google shows nothing at all.
      * If it can't renew without asking, it throws and we simply drop to
-     * "Not connected" with a Connect button in Settings, rather than
+     * "Not connected" with a Connect button in the top-bar Drive popup, rather than
      * interrupting the user with a sign-in screen they didn't ask for.
      */
     await requestToken('none');
@@ -554,7 +567,7 @@ async function signIn(){
 
   /*
    * This is the ONLY place a visible Google screen may be shown — it only
-   * runs when the user explicitly taps "Connect" in Settings. Nothing
+   * runs when the user explicitly taps "Connect" in the top-bar Drive popup. Nothing
    * triggered by page load, unlock, refresh, visibility or connectivity
    * changes is allowed to ask the user for anything; those all go through
    * requestToken('none'), which shows nothing ever.
@@ -1135,7 +1148,7 @@ async function ensureDoseLogHeader(){
   const range =
     encodeURIComponent(
       DRIVE_CONFIG.DOSELOG_TAB +
-      '!A1:G1'
+      '!A1:I1'
     );
 
 
@@ -1376,6 +1389,12 @@ function entryToRow(
    SHEET ROW → ENTRY
    ========================================================================= */
 
+function validRecordId(id){
+  return typeof id === 'string' && !['__proto__', 'constructor', 'prototype'].includes(id) && /^[A-Za-z0-9_:|.-]{1,200}$/.test(id);
+}
+function validClock(time){
+  return typeof time === 'string' && /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time);
+}
 function rowToEntry(row){
 
   if(
@@ -1407,10 +1426,7 @@ function rowToEntry(row){
     );
 
 
-  const ts =
-    isNaN(parsedTs)
-      ? Date.now()
-      : parsedTs;
+  const ts = Number.isFinite(parsedTs) ? parsedTs : null;
 
 
   /*
@@ -1442,6 +1458,7 @@ function rowToEntry(row){
   }
 
 
+  if(ts === null || !validRecordId(String(id)) || !validRecordId(type)) return null;
   const entry = {
 
     id,
@@ -1709,6 +1726,7 @@ async function upsertRow(
   entry,
   deleted
 ){
+  if(!await shouldUploadRecord('entry', entry, deleted)) return;
 
   const rowNumber =
     await findRowNumberById(
@@ -1805,8 +1823,8 @@ function rowToMetric(row){
   }
 
 
-  const id =
-    String(row[0]);
+  const id = String(row[0]);
+  if(!validRecordId(id)) return null;
 
   const name =
     String(
@@ -1929,6 +1947,7 @@ async function upsertMetricRow(
   metric,
   deleted
 ){
+  if(!await shouldUploadRecord('metric', metric, deleted)) return;
 
   const rowNumber =
     await findMetricRowNumberById(
@@ -2076,16 +2095,18 @@ function rowToMedicine(row){
   if(!row || !row[0]) return null;
 
   const id = String(row[0]);
+  if(!validRecordId(id)) return null;
   const name = String(row[1] || '').trim();
   const updatedAt = Number(row[8]) || 0;
   const deleted = String(row[9] || '').toUpperCase() === 'TRUE';
 
   if(deleted || !name) return { id, updatedAt, deleted:true };
+  if(!validClock(row[3])) return null;
 
   let days = 'daily';
   try{
     const parsed = JSON.parse(row[4]);
-    if(parsed === 'daily' || Array.isArray(parsed)) days = parsed;
+    if(parsed === 'daily' || (Array.isArray(parsed) && parsed.every(day => Number.isInteger(day) && day >= 0 && day <= 6))) days = parsed;
   }catch(error){ days = 'daily'; }
 
   return {
@@ -2123,6 +2144,7 @@ async function findMedicineRowNumberById(id){
 }
 
 async function upsertMedicineRow(medicine, deleted){
+  if(!await shouldUploadRecord('medicine', medicine, deleted)) return;
   const rowNumber = await findMedicineRowNumberById(medicine.id);
 
   if(!rowNumber){
@@ -2205,7 +2227,9 @@ function doseLogToRow(entry, deleted){
     entry.time || '',
     entry.status || '',
     entry.updatedAt || Date.now(),
-    deleted ? 'TRUE' : 'FALSE'
+    deleted ? 'TRUE' : 'FALSE',
+    entry.medicineName || '',
+    entry.medicineDose || ''
   ];
 }
 
@@ -2217,6 +2241,8 @@ function rowToDoseLog(row){
   const deleted = String(row[6] || '').toUpperCase() === 'TRUE';
 
   if(deleted) return { id, updatedAt, deleted:true };
+  if(!validRecordId(row[1]) || !validClock(row[3]) || !['taken', 'skipped'].includes(row[4])
+    || !/^\d{4}-\d{2}-\d{2}$/.test(row[2] || '')) return null;
 
   return {
     id,
@@ -2224,13 +2250,15 @@ function rowToDoseLog(row){
     date: row[2] || '',
     time: row[3] || '',
     status: row[4] || '',
+    medicineName: row[7] || '',
+    medicineDose: row[8] || '',
     updatedAt,
     deleted:false
   };
 }
 
 async function getAllDoseLogRows(){
-  const range = encodeURIComponent(DRIVE_CONFIG.DOSELOG_TAB + '!A2:G');
+  const range = encodeURIComponent(DRIVE_CONFIG.DOSELOG_TAB + '!A2:I');
   const response = await apiFetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`
   );
@@ -2250,10 +2278,11 @@ async function findDoseLogRowNumberById(id){
 }
 
 async function upsertDoseLogRow(entry, deleted){
+  if(!await shouldUploadRecord('doselog', entry, deleted)) return;
   const rowNumber = await findDoseLogRowNumberById(entry.id);
 
   if(!rowNumber){
-    const range = encodeURIComponent(DRIVE_CONFIG.DOSELOG_TAB + '!A1:G1');
+    const range = encodeURIComponent(DRIVE_CONFIG.DOSELOG_TAB + '!A1:I1');
     await apiFetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       {
@@ -2265,7 +2294,7 @@ async function upsertDoseLogRow(entry, deleted){
     return;
   }
 
-  const range = encodeURIComponent(DRIVE_CONFIG.DOSELOG_TAB + `!A${rowNumber}:G${rowNumber}`);
+  const range = encodeURIComponent(DRIVE_CONFIG.DOSELOG_TAB + `!A${rowNumber}:I${rowNumber}`);
   await apiFetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=RAW`,
     {
@@ -2412,7 +2441,53 @@ async function syncEntries(){
    MAIN SYNCHRONIZATION
    ========================================================================= */
 
+// All browser tabs for this account share one upload lock when supported.
+// The fallback serializes tasks within this page on older browsers.
+let driveWork = Promise.resolve();
+function withDriveLock(task){
+  const name = acctDrivePrefix() + 'upload';
+  if(navigator.locks && navigator.locks.request){
+    return navigator.locks.request(name, task);
+  }
+  const work = driveWork.then(task, task);
+  driveWork = work.catch(() => {});
+  return work;
+}
+
 async function syncNow(force){
+  return withDriveLock(() => syncNowUnlocked(force));
+}
+async function flushQueue(){
+  return withDriveLock(flushQueueUnlocked);
+}
+
+// Check the latest Sheet record before every write, including queued deletes.
+// A newer remote record wins; a deletion wins over a live record at equal time.
+async function shouldUploadRecord(kind, record, deleted){
+  const sources = {
+    entry: [getAllRows, rowToEntry],
+    metric: [getAllMetricRows, rowToMetric],
+    medicine: [getAllMedicineRows, rowToMedicine],
+    doselog: [getAllDoseLogRows, rowToDoseLog]
+  };
+  const [readRows, parseRow] = sources[kind];
+  const rows = await readRows();
+  let newest = null;
+  for(const row of rows){
+    const remote = parseRow(row);
+    if(!remote || remote.id !== record.id) continue;
+    if(!newest || Number(remote.updatedAt || 0) > Number(newest.updatedAt || 0)
+      || (Number(remote.updatedAt || 0) === Number(newest.updatedAt || 0) && remote.deleted)){
+      newest = remote;
+    }
+  }
+  if(!newest) return true;
+  const remoteTime = Number(newest.updatedAt || 0);
+  const localTime = Number(record.updatedAt || record.ts || 0);
+  return remoteTime < localTime || (remoteTime === localTime && (!newest.deleted || deleted));
+}
+
+async function syncNowUnlocked(force){
 
   if(
     syncing ||
@@ -2629,267 +2704,51 @@ function dedupeQueueFor(
 }
 
 
-function queueUpsert(
-  entry
-){
-
-  const queue =
-    dedupeQueueFor('entry', entry.id);
-
-  queue.push({
-
-    kind:
-      'entry',
-
-    op:
-      'upsert',
-
-    entry
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
+// Every record type follows the same process: replace an older pending
+// operation for this ID, persist the new operation, then try to send it.
+// Public wrappers retain the existing API and stored queue format.
+function enqueueChange(kind, operation, payload){
+  const id = operation === 'upsert'
+    ? payload[kind === 'metric' ? 'metric' : kind === 'medicine' ? 'medicine' : 'entry'].id
+    : payload.id;
+  const queue = dedupeQueueFor(kind, id);
+  const queueId = window.crypto && window.crypto.randomUUID
+    ? window.crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2);
+  queue.push(Object.assign({ kind, op: operation, queueId }, payload));
+  saveQueue(queue);
   flushQueue();
-
 }
 
-
-function queueDelete(
-  id,
-  updatedAt
-){
-
-  const queue =
-    dedupeQueueFor('entry', id);
-
-  queue.push({
-
-    kind:
-      'entry',
-
-    op:
-      'delete',
-
-    id,
-
-    updatedAt:
-      updatedAt || Date.now()
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueUpsert(entry){
+  enqueueChange('entry', 'upsert', { entry });
 }
-
-
-function queueMetricUpsert(
-  metric
-){
-
-  const queue =
-    dedupeQueueFor('metric', metric.id);
-
-  queue.push({
-
-    kind:
-      'metric',
-
-    op:
-      'upsert',
-
-    metric
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueDelete(id, updatedAt){
+  enqueueChange('entry', 'delete', { id, updatedAt: updatedAt || Date.now() });
 }
-
-
-function queueMetricDelete(
-  id,
-  updatedAt
-){
-
-  const queue =
-    dedupeQueueFor('metric', id);
-
-  queue.push({
-
-    kind:
-      'metric',
-
-    op:
-      'delete',
-
-    id,
-
-    updatedAt:
-      updatedAt || Date.now()
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueMetricUpsert(metric){
+  enqueueChange('metric', 'upsert', { metric });
 }
-
-
-function queueMedicineUpsert(
-  medicine
-){
-
-  const queue =
-    dedupeQueueFor('medicine', medicine.id);
-
-  queue.push({
-
-    kind:
-      'medicine',
-
-    op:
-      'upsert',
-
-    medicine
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueMetricDelete(id, updatedAt){
+  enqueueChange('metric', 'delete', { id, updatedAt: updatedAt || Date.now() });
 }
-
-
-function queueMedicineDelete(
-  id,
-  updatedAt
-){
-
-  const queue =
-    dedupeQueueFor('medicine', id);
-
-  queue.push({
-
-    kind:
-      'medicine',
-
-    op:
-      'delete',
-
-    id,
-
-    updatedAt:
-      updatedAt || Date.now()
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueMedicineUpsert(medicine){
+  enqueueChange('medicine', 'upsert', { medicine });
 }
-
-
-function queueDoseLogUpsert(
-  entry
-){
-
-  const queue =
-    dedupeQueueFor('doselog', entry.id);
-
-  queue.push({
-
-    kind:
-      'doselog',
-
-    op:
-      'upsert',
-
-    entry
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueMedicineDelete(id, updatedAt){
+  enqueueChange('medicine', 'delete', { id, updatedAt: updatedAt || Date.now() });
 }
-
-
-function queueDoseLogDelete(
-  id,
-  updatedAt
-){
-
-  const queue =
-    dedupeQueueFor('doselog', id);
-
-  queue.push({
-
-    kind:
-      'doselog',
-
-    op:
-      'delete',
-
-    id,
-
-    updatedAt:
-      updatedAt || Date.now()
-
-  });
-
-
-  saveQueue(
-    queue
-  );
-
-
-  flushQueue();
-
+function queueDoseLogUpsert(entry){
+  enqueueChange('doselog', 'upsert', { entry });
 }
-
+function queueDoseLogDelete(id, updatedAt){
+  enqueueChange('doselog', 'delete', { id, updatedAt: updatedAt || Date.now() });
+}
 
 /* =========================================================================
    FLUSH OFFLINE CHANGES
    ========================================================================= */
 
-async function flushQueue(){
+async function flushQueueUnlocked(){
 
   if(
     flushing ||
@@ -3083,11 +2942,15 @@ async function flushQueue(){
       }
 
 
-      queue.shift();
-
-      saveQueue(
-        queue
-      );
+      // Edits can arrive during an awaited upload. Remove only this exact
+      // operation from the latest queue, never write back the old snapshot.
+      const latestQueue = getQueue();
+      const completedIndex = latestQueue.findIndex(pending =>
+        item.queueId ? pending.queueId === item.queueId
+          : !pending.queueId && JSON.stringify(pending) === JSON.stringify(item));
+      if(completedIndex !== -1) latestQueue.splice(completedIndex, 1);
+      saveQueue(latestQueue);
+      queue = getQueue();
 
     }
 
@@ -3132,18 +2995,18 @@ async function restoreFromSheet(){
 
   const entryMap = new Map(DB.getEntries().map(e => [e.id, e]));
   result.entries = pullInto(entryMap, Array.from((await getRemoteMap()).values()));
-  DB.saveEntries(Array.from(entryMap.values()));
+  if(!DB.saveEntries(Array.from(entryMap.values()))) throw new Error('Could not save restored readings on this device. Free up storage and try again.');
 
   if(DB.getCustomMetrics && DB.saveCustomMetrics){
     const metricMap = new Map(DB.getCustomMetrics().map(m => [m.id, m]));
     result.metrics = pullInto(metricMap, (await getAllMetricRows()).map(rowToMetric));
-    DB.saveCustomMetrics(Array.from(metricMap.values()));
+    if(!DB.saveCustomMetrics(Array.from(metricMap.values()))) throw new Error('Could not save restored parameters on this device.');
   }
 
   if(DB.getMedicines && DB.saveMedicines){
     const medicineMap = new Map(DB.getMedicines().map(m => [m.id, m]));
     result.medicines = pullInto(medicineMap, (await getAllMedicineRows()).map(rowToMedicine));
-    DB.saveMedicines(Array.from(medicineMap.values()));
+    if(!DB.saveMedicines(Array.from(medicineMap.values()))) throw new Error('Could not save restored medicines on this device.');
   }
 
   if(DB.getDoseLog && DB.saveDoseLog){
@@ -3151,7 +3014,7 @@ async function restoreFromSheet(){
     result.doseLog = pullInto(doseLogMap, (await getAllDoseLogRows()).map(rowToDoseLog));
     const mergedObj = {};
     doseLogMap.forEach(e => { mergedObj[e.id] = e; });
-    DB.saveDoseLog(mergedObj);
+    if(!DB.saveDoseLog(mergedObj)) throw new Error('Could not save restored dose history on this device.');
   }
 
   notifyStatus();
@@ -3227,6 +3090,7 @@ window.VitalsDrive = {
       if(k && k.indexOf(prefix) === 0) toRemove.push(k);
     }
     toRemove.forEach(k => localStorage.removeItem(k));
+    for(const suffix of ['accessToken', 'tokenExpiry']) sessionStorage.removeItem(prefix + suffix);
   },
 
   init(){

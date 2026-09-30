@@ -3721,7 +3721,7 @@ function initForAccount(forceLock){
 }
 function registerServiceWorker(){
   if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('service-worker.js').then(reg => {
+    navigator.serviceWorker.register('service-worker.js', {updateViaCache:'none'}).then(reg => {
       // Browsers only re-check a registered service worker for updates in
       // the background at most about once every 24h. That's far too slow
       // for how often this app gets updated -- someone could keep running
@@ -3741,6 +3741,10 @@ function registerServiceWorker(){
       window.location.reload();
     }
     navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if(window.VitalsUpdates){
+        window.VitalsUpdates.check();
+        return;
+      }
       const sheet = $('#sheet');
       if(sheet && sheet.classList.contains('show')){
         // Don't yank an in-progress entry out from under someone -- wait

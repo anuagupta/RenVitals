@@ -1,5 +1,21 @@
 # Vitals
 
+## Release freshness
+
+Online visits use network-first app files with HTTP-cache bypass and a fresh
+request URL to avoid stale CDN entries. A release check runs on load, return
+to the foreground, and reconnection. New releases refresh automatically,
+waiting for open forms/detail screens to close so active edits aren't lost.
+Saved account records and pending uploads are not cleared. Offline visits
+use the last downloaded release; no website can fetch a new release offline.
+
+For every deployment, bump `vitals-release` in index.html, modified asset
+query versions, the manifest link when icons change, and CACHE_NAME in the
+service worker. Keep APP_SHELL aligned. Run `node tests/updates.cjs` and
+`node tests/regressions.cjs`. Browser/OS-installed icon refresh timing is
+separate and cannot be forced by webpage code. First visits can briefly
+show previously cached markup while the update check completes.
+
 A private, Apple-style health log for fluid intake, urine output, blood pressure,
 sugar, and customizable medicine alarms. It's a web app you install to your
 phone's home screen — no App Store, works on Android and iPhone, and all your

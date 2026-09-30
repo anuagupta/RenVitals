@@ -11,56 +11,72 @@
    here. The only interactive controls left are pure navigation: switching
    tabs, opening a detail screen, and stepping/jumping between days.
 
-   Data comes straight from the public "anyone with the link can view" tabs
-   of the same Google Sheet the app backs up to (Sheet1, Metrics, Medicines,
+   Data comes from Google-authorized Sheets API reads of the selected
+   Google Sheet the app backs up to (Sheet1, Metrics, Medicines,
    DoseLog) — never from a browser's localStorage, since this page is meant
    to open identically on any device. rowToEntry/rowToMetric/rowToMedicine/
    rowToDoseLog mirror drive.js's own row parsers exactly, since that's the
    format this sheet is actually written in.
    ========================================================================= */
 
-const SHEET_ID = '1uo5E1Zc-cNFA79WiO_IAtnG-cIKeYnGstyE21AkqpiM';
+let SHEET_ID = new URLSearchParams(window.location.search).get('sheet') || '';
+const GOOGLE_CLIENT_ID = '724605143169-61ikt0nqu8i0j0rev323itqetk9phl72.apps.googleusercontent.com';
+let dashboardToken = null;
+let dashboardTokenExpiry = 0;
+let dashboardLoading = false;
 const SHEET_TAB = 'Sheet1';
 const METRICS_TAB = 'Metrics';
 const MEDICINES_TAB = 'Medicines';
 const DOSELOG_TAB = 'DoseLog';
 const REFRESH_MS = 60000;
 
-function csvUrl(tab){
-  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}&_=${Date.now()}`;
-}
-
-/* ---------------------------------------------------------------------
-   Minimal CSV parser — handles quoted fields, embedded commas, embedded
-   newlines, and "" escaped quotes, which Google's CSV export uses.
-   --------------------------------------------------------------------- */
-function parseCSV(text){
-  const rows = [];
-  let row = [], field = '', inQuotes = false;
-  for(let i=0;i<text.length;i++){
-    const c = text[i], next = text[i+1];
-    if(inQuotes){
-      if(c === '"' && next === '"'){ field += '"'; i++; }
-      else if(c === '"'){ inQuotes = false; }
-      else field += c;
-    } else {
-      if(c === '"') inQuotes = true;
-      else if(c === ','){ row.push(field); field = ''; }
-      else if(c === '\n'){ row.push(field); rows.push(row); row = []; field = ''; }
-      else if(c === '\r'){ /* skip, \n follows */ }
-      else field += c;
-    }
-  }
-  if(field !== '' || row.length){ row.push(field); rows.push(row); }
-  return rows.filter(r => r.length && !(r.length===1 && r[0]===''));
-}
 
 async function fetchTab(tab){
-  const res = await fetch(csvUrl(tab), {cache:'no-store'});
-  if(!res.ok) throw new Error('HTTP ' + res.status + ' for ' + tab);
-  const text = await res.text();
-  const rows = parseCSV(text);
-  return rows.slice(1); // drop header row
+  const range = encodeURIComponent(tab + '!A:O');
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}`,
+    {headers:{Authorization:'Bearer ' + dashboardToken}, cache:'no-store'}
+  );
+  if(response.status === 401){
+    dashboardToken = null;
+    dashboardTokenExpiry = 0;
+    throw new Error('Google session expired. Sign in again.');
+  }
+  if(!response.ok) throw new Error('Could not read ' + tab + ' (HTTP ' + response.status + ')');
+  const data = await response.json();
+  return (data.values || []).slice(1);
+}
+
+function connectDashboard(){
+  const raw = document.getElementById('dashboard-sheet').value.trim();
+  const match = raw.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/);
+  const sheet = match ? match[1] : raw;
+  if(!/^[A-Za-z0-9_-]{20,}$/.test(sheet)){
+    document.getElementById('dash-status').textContent = 'Enter a Google Sheet link or ID first.';
+    return;
+  }
+  if(!window.google || !google.accounts || !google.accounts.oauth2){
+    document.getElementById('dash-status').textContent = 'Google Sign-In is still loading. Try again in a moment.';
+    return;
+  }
+  SHEET_ID = sheet;
+  dashboardToken = null;
+  ENTRIES = []; CUSTOM_METRICS = {}; MEDICINES = []; DOSELOG = {};
+  renderAll();
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id:GOOGLE_CLIENT_ID,
+    scope:'https://www.googleapis.com/auth/drive.file',
+    callback:response=>{
+      if(response.error){
+        document.getElementById('dash-status').textContent = 'Sign-in was cancelled or failed.';
+        return;
+      }
+      dashboardToken = response.access_token;
+      dashboardTokenExpiry = Date.now() + (Number(response.expires_in) || 3600)*1000;
+      loadData();
+    }
+  });
+  client.requestAccessToken({prompt:''});
 }
 
 /* ---------------------------------------------------------------------
@@ -75,9 +91,10 @@ function rowToEntry(row){
   const parsedTs = Date.parse(`${date}T${time}:00`);
   const ts = isNaN(parsedTs) ? null : parsedTs;
   const deleted = String(row[13] || '').toUpperCase() === 'TRUE';
-  if(deleted || ts === null) return null;
+  if(deleted) return {id, deleted:true, updatedAt:Number(row[12]) || 0};
+  if(ts === null) return null;
 
-  const entry = {id, type, ts};
+  const entry = {id, type, ts, updatedAt:Number(row[12]) || ts};
   if(type === 'liquid' || type === 'urine'){
     entry.amount = Number(row[4]) || 0;
     if(type === 'liquid') entry.drink = row[5] || '';
@@ -111,17 +128,18 @@ const VALID_METRIC_COLORS = ['blue','yellow','red','green','orange','purple','pi
 function rowToMetric(row){
   if(!row || !row[0]) return null;
   const deleted = String(row[5] || '').toUpperCase() === 'TRUE';
-  if(deleted) return null;
+  if(deleted) return { id:String(row[0]), deleted:true, updatedAt:Number(row[4]) || 0 };
   const rawColor = String(row[3] || '').trim();
   const colorClass = VALID_METRIC_COLORS.includes(rawColor) ? rawColor : 'orange';
-  return {id: String(row[0]), name: row[1] || 'Custom metric', unit: row[2] || '', colorClass};
+  return {updatedAt:Number(row[4]) || 0, id: String(row[0]), name: row[1] || 'Custom metric', unit: row[2] || '', colorClass};
 }
 
 function rowToMedicine(row){
   if(!row || !row[0]) return null;
   const name = String(row[1] || '').trim();
   const deleted = String(row[9] || '').toUpperCase() === 'TRUE';
-  if(deleted || !name) return null;
+  if(deleted) return {id:String(row[0]), deleted:true, updatedAt:Number(row[8]) || 0};
+  if(!name) return null;
   let days = 'daily';
   try{
     const parsed = JSON.parse(row[4]);
@@ -141,7 +159,7 @@ function rowToMedicine(row){
 function rowToDoseLog(row){
   if(!row || !row[0]) return null;
   const deleted = String(row[6] || '').toUpperCase() === 'TRUE';
-  if(deleted) return null;
+  if(deleted) return {id:String(row[0]), deleted:true, updatedAt:Number(row[5]) || 0};
   return {
     id: String(row[0]),
     medicineId: row[1] || '',
@@ -230,9 +248,8 @@ function escapeHtml(str){
 }
 function avg(list){ return list.reduce((s,v)=>s+v,0) / (list.length||1); }
 function roundSmart(v, digits){
-  if(Math.abs(v) >= 100) return Math.round(v);
   const f = Math.pow(10, digits);
-  return Math.round(v*f)/f;
+  return Math.round((v + Number.EPSILON)*f)/f;
 }
 function pointsToPath(points){ return 'M' + points.map(p => p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L'); }
 
@@ -815,23 +832,41 @@ function renderAll(){
   }
 }
 
+// Resolve duplicate rows and deletion markers before filtering out deletes.
+function newestLiveRecords(rows, parseRow){
+  const records = new Map();
+  for(const row of rows){
+    const record = parseRow(row);
+    if(!record) continue;
+    const existing = records.get(record.id);
+    if(!existing || Number(record.updatedAt || 0) > Number(existing.updatedAt || 0)
+      || (Number(record.updatedAt || 0) === Number(existing.updatedAt || 0) && record.deleted)){
+      records.set(record.id, record);
+    }
+  }
+  return Array.from(records.values()).filter(record => !record.deleted);
+}
+
 async function loadData(){
   const statusEl = document.getElementById('dash-status');
+  if(!dashboardToken || Date.now() >= dashboardTokenExpiry){
+    dashboardToken = null;
+    statusEl.textContent = 'Sign in with Google to view a Sheet you can access.';
+    return;
+  }
+  if(dashboardLoading) return;
+  dashboardLoading = true;
   statusEl.textContent = 'Refreshing…';
   statusEl.classList.remove('err');
   try{
     const sheet1Rows = await fetchTab(SHEET_TAB);
-    ENTRIES = sheet1Rows.map(rowToEntry).filter(Boolean);
+    ENTRIES = newestLiveRecords(sheet1Rows, rowToEntry);
 
     try{
       const metricRows = await fetchTab(METRICS_TAB);
       const map = {};
-      metricRows.map(rowToMetric).filter(Boolean).forEach(m => { map[m.id] = m; });
-      // Only keep metric definitions that actually have entries, and only
-      // trust them if they look like real Metrics rows (a Name column).
-      if(Object.values(map).some(m => m.name && m.name !== 'Custom metric')){
-        CUSTOM_METRICS = map;
-      }
+      newestLiveRecords(metricRows, rowToMetric).forEach(m => { map[m.id] = m; });
+      CUSTOM_METRICS = map;
     } catch(e){
       console.warn('Vitals dashboard: Metrics tab not read, falling back to generic labels', e);
     }
@@ -847,11 +882,7 @@ async function loadData(){
     try{
       const medRows = await fetchTab(MEDICINES_TAB);
       const map = {};
-      medRows.map(rowToMedicine).filter(Boolean).forEach(m=>{
-        const existing = map[m.id];
-        if(!existing || (m.updatedAt||0) >= (existing.updatedAt||0)) map[m.id] = m;
-      });
-      MEDICINES = Object.values(map).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+      MEDICINES = newestLiveRecords(medRows, rowToMedicine).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
     } catch(e){
       console.warn('Vitals dashboard: Medicines tab not read', e);
       MEDICINES = [];
@@ -860,10 +891,7 @@ async function loadData(){
     try{
       const doseRows = await fetchTab(DOSELOG_TAB);
       const map = {};
-      doseRows.map(rowToDoseLog).filter(Boolean).forEach(entry=>{
-        const existing = map[entry.id];
-        if(!existing || (entry.updatedAt||0) >= (existing.updatedAt||0)) map[entry.id] = entry;
-      });
+      newestLiveRecords(doseRows, rowToDoseLog).forEach(entry => { map[entry.id] = entry; });
       DOSELOG = map;
     } catch(e){
       console.warn('Vitals dashboard: DoseLog tab not read', e);
@@ -874,8 +902,10 @@ async function loadData(){
     statusEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
   } catch(err){
     console.error(err);
-    statusEl.textContent = 'Could not load data — the sheet may not be shared as "Anyone with the link can view," or the connection dropped. Retrying automatically.';
+    statusEl.textContent = err.message || 'Could not load data. Check your Google account and Sheet access.';
     statusEl.classList.add('err');
+  } finally {
+    dashboardLoading = false;
   }
 }
 
@@ -883,6 +913,8 @@ async function loadData(){
    Event wiring — every control left here is navigation, never input.
    --------------------------------------------------------------------- */
 function wireEvents(){
+  document.getElementById('dashboard-sheet').value = SHEET_ID;
+  document.getElementById('dashboard-connect').addEventListener('click', connectDashboard);
   document.querySelectorAll('.tab').forEach(tab=> tab.addEventListener('click', ()=> showPanel(tab.dataset.tab)));
   document.getElementById('refresh-btn').addEventListener('click', loadData);
 

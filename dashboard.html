@@ -6,14 +6,14 @@
 <title>Vitals — Dashboard</title>
 <meta name="description" content="A read-only view of Vitals health data. Nothing on this page can be edited.">
 <meta name="robots" content="noindex, nofollow">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://docs.google.com; base-uri 'self'; form-action 'self'; object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; base-uri 'self'; form-action 'self'; object-src 'none';">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <!-- Same stylesheet the app itself uses — every class below (.card, .tabbar,
      .detail, .dose-row, …) is already styled there, so this page renders
      pixel-for-pixel like the app's own screens, light/dark theme included. -->
-<link rel="stylesheet" href="styles.css?v=17">
+<link rel="stylesheet" href="styles.css?v=20">
 <style>
   /* The one thing this page needs that the app doesn't. */
   .readonly-badge{
@@ -54,6 +54,12 @@
   </div>
 
   <main>
+    <div class="trend-card" style="padding:16px;">
+      <label class="settings-label" for="dashboard-sheet">Your Vitals Google Sheet</label>
+      <input class="note-input" id="dashboard-sheet" placeholder="Paste a Sheet link or ID" autocomplete="off">
+      <button class="mini-btn" id="dashboard-connect" type="button" style="margin-top:10px;">Sign in with Google</button>
+      <p class="settings-sub">Only Sheets available to your Google account and this app can be read. You do not need to make your health data public.</p>
+    </div>
     <!-- ============ HOME PANEL — tap any card to see its full detail ============ -->
     <section class="panel active" id="panel-home">
       <div class="grid" id="home-grid"><!-- cards rendered by dashboard.js --></div>
@@ -169,6 +175,7 @@
 
 </div>
 
-<script src="dashboard.js?v=6"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="dashboard.js?v=2"></script>
 </body>
 </html>

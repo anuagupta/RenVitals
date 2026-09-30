@@ -8,6 +8,12 @@ data stays on your device unless you connect Google Drive.
 This guide gets it online (free, ~10 minutes) and, optionally, connected to
 your Google Drive.
 
+For the current application flow and file responsibilities, see
+[WORKFLOW.md](WORKFLOW.md). For the code audit, confirmed issues, and
+behavior-preserving cleanup, see [AUDIT.md](AUDIT.md).
+Google account sign-in and Google Drive authorization are separate:
+account sign-in selects local account data, while Drive connection enables backup.
+
 ---
 
 ## 1. Put the app online with GitHub Pages
@@ -121,7 +127,7 @@ access to the one spreadsheet it creates, nothing else in your Drive).
    ```
 3. Replace the placeholder with the Client ID you copied, keeping the quotes.
 4. Commit the change.
-5. Open Vitals on your phone → **Settings → Google Drive backup → Connect**,
+5. Open Vitals on your phone → **the Google Drive sync icon in the top bar → Connect**,
    sign in, and approve access. A sheet named **"Vitals Health Log"** will
    appear in your Drive, and Settings will show an **Open** link to it
    directly.
@@ -148,7 +154,7 @@ directly in the sheet aren't read back into the app.
   with its own tone (Chime, Bell, Beep, or Silent) that plays while Vitals
   is open; tap a tone while picking it to preview how it sounds.
 - **Settings** — light/dark, app lock, Face/Fingerprint unlock, per-tab
-  colors, custom health parameters, Google Drive, and a CSV export of
+  colors, custom health parameters, a CSV export of
   everything on this device.
 
 ### Editing or deleting an entry
@@ -217,7 +223,7 @@ default sound.
 ### Your data, in plain terms
 
 Everything is stored in your phone browser's local storage — nothing is
-sent anywhere unless you connect Google Drive in Settings. Uninstalling the
+sent anywhere unless you connect Google Drive using the top-bar sync icon. Uninstalling the
 app or clearing your browser's site data for it will erase your log, so if
 you're relying on it long-term, either connect Drive backup or export a CSV
 occasionally from Settings.

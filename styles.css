@@ -626,7 +626,6 @@ main:has(> #panel-home.active){overflow:hidden;}
 .collapsible-toggle .chevron{transition:transform .2s ease;flex-shrink:0;color:var(--text-dim-2);}
 .collapsible-toggle .chevron.rotated{transform:rotate(90deg);}
 #tab-colors-list.collapsed{display:none;}
-#drive-backup-panel.collapsed{display:none;}
 #custom-metrics-list.collapsed{display:none;}
 .collapsible-toggle-inline{
   display:flex;align-items:center;gap:7px;background:transparent;border:none;padding:0;
@@ -875,9 +874,10 @@ main:has(> #panel-home.active){overflow:hidden;}
   max-width:480px;margin:0 auto;
   transform:translateX(100%);transition:transform .28s cubic-bezier(.2,.9,.3,1);
   overflow-y:auto;
+  visibility:hidden;
   padding:calc(14px + env(safe-area-inset-top)) 20px calc(30px + env(safe-area-inset-bottom));
 }
-.detail.show{transform:translateX(0);}
+.detail.show{transform:translateX(0);visibility:visible;}
 .detail-header{display:flex;align-items:center;gap:13px;}
 .detail-back{
   width:36px;height:36px;border-radius:13px;flex-shrink:0;cursor:pointer;
@@ -979,3 +979,23 @@ main:has(> #panel-home.active){overflow:hidden;}
 
 ::selection{background:color-mix(in srgb,var(--blue) 40%,transparent);color:var(--text);}
 a{color:var(--blue);}
+
+/* Drive connection status is available on every tab. */
+.drive-status-button[data-status="connected"]{color:#15803d;background:rgba(22,163,74,.12);}
+.drive-status-button[data-status="connecting"]{color:#c2410c;background:rgba(249,115,22,.12);}
+.drive-status-button[data-status="disconnected"]{color:#dc2626;background:rgba(239,68,68,.12);}
+.drive-dialog{box-sizing:border-box;width:min(440px,calc(100% - 32px));max-height:80dvh;overflow-y:auto;padding:20px;border:1px solid var(--border);border-radius:20px;background:var(--bg);color:var(--text);}
+.drive-dialog::backdrop{background:rgba(0,0,0,.45);}
+.drive-dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;}
+.drive-dialog-heading h2{margin:0;font-size:18px;}
+.drive-dialog .settings-row{gap:12px;}
+
+.medicine-day-history{padding:16px;}
+.medicine-day-history input{margin-top:8px;}
+.medicine-history-heading{display:flex;align-items:center;gap:8px;font-size:14px;margin:20px 0 4px;}
+.medicine-history-heading span:last-child{color:var(--text-dim-2);font-weight:400;}
+.medicine-history-row{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--hairline-2);}
+.medicine-history-row:last-child{border-bottom:0;}
+.medicine-status-square{display:inline-block;width:13px;height:13px;border-radius:2px;flex-shrink:0;}
+.medicine-status-square.taken{background:#16a34a;}
+.medicine-status-square.skipped{background:#dc2626;}

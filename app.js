@@ -135,7 +135,7 @@ const DB = {
   },
   _set(key, value){
     // Returns whether the write actually landed, so callers on the critical
-    // "new data just came in" path (see saveEntryFromSheet etc.) can tell
+    // "new data just came in" path (see saveEntry) can tell
     // the user their reading wasn't saved instead of silently discarding it
     // — e.g. if on-device storage is full, which is the one realistic way
     // this synchronous, local-first write can fail.
@@ -154,21 +154,20 @@ const DB = {
   getCustomMetrics(){ return this._get(this._acctKey('customMetrics'), []); },
   saveCustomMetrics(list){ return this._set(this._acctKey('customMetrics'), list); },
   getColorOverrides(){ return this._get(this._acctKey('colorOverrides'), {}); },
-  saveColorOverrides(o){ this._set(this._acctKey('colorOverrides'), o); },
+  saveColorOverrides(o){ return this._set(this._acctKey('colorOverrides'), o); },
   // Home tile order + half/full width, set by long-pressing a tile. Purely
   // a local display preference — like theme/pinHash, never synced to the
   // Google Sheet.
   getHomeLayout(){ return this._get(this._acctKey('homeLayout'), []); },
-  saveHomeLayout(layout){ this._set(this._acctKey('homeLayout'), layout); },
+  saveHomeLayout(layout){ return this._set(this._acctKey('homeLayout'), layout); },
   getSettings(){ return this._get(this._acctKey('settings'), {
     pinHash:null, pinSalt:null, theme:'dark', timeFormat:'12h', bioEnabled:false, bioCredId:null, onboarded:false
   }); },
-  saveSettings(s){ this._set(this._acctKey('settings'), s); },
-  // Everything this account owns, keyed the same way saveProfileFields
-  // below writes it — gender/age are the only fields Google itself never
+  saveSettings(s){ return this._set(this._acctKey('settings'), s); },
+  // Everything this account owns, stored under this account — gender/age are the only fields Google itself never
   // provides (see the profile page), so they're plain local fields here.
   getProfileFields(){ return this._get(this._acctKey('profileFields'), { gender:null, age:null }); },
-  saveProfileFields(f){ this._set(this._acctKey('profileFields'), f); }
+  saveProfileFields(f){ return this._set(this._acctKey('profileFields'), f); }
 };
 
 /* ---------------------------------------------------------------------
@@ -310,9 +309,9 @@ const METRIC_SUGGESTIONS = [
   {name:'Tacrolimus level', unit:'ng/mL', colorClass:'teal'}
 ];
 // Every color available anywhere a tab/metric color can be picked — the four
-// built-in tab colors plus the four extra ones offered for custom metrics.
+// built-in tab colors plus the custom metric colors and white.
 // Used for the Settings "Tab colors" picker so any tab (built-in or custom)
-// can be recolored to any of the eight.
+// can be recolored to any of the nine.
 const ALL_COLORS = [
   ['blue','Blue','--blue'], ['yellow','Yellow','--yellow'],
   ['red','Red','--red'],    ['green','Green','--green'],
@@ -357,50 +356,32 @@ function getMetricMeta(type){
 function setTabColor(type, colorKey){
   const overrides = DB.getColorOverrides();
   overrides[type] = colorKey;
-  DB.saveColorOverrides(overrides);
+  if(!DB.saveColorOverrides(overrides)){ alert('Could not save card colors.'); return; }
   renderAll();
   renderSettingsPanel();
 }
 function allMetricTypes(){
   return Object.keys(TYPE_META).concat(DB.getCustomMetrics().map(m=>m.id));
 }
-function applyTabColorsCollapsed(){
-  const panel = $('#tab-colors-list');
-  const toggle = $('#tab-colors-toggle');
-  const chevron = $('#tab-colors-chevron');
+// Keep each collapsible section's visibility, accessibility state, and arrow in sync.
+function applyCollapsedSection(panelId, toggleId, chevronId, collapsed){
+  const panel = $('#' + panelId);
+  const toggle = $('#' + toggleId);
+  const chevron = $('#' + chevronId);
   if(!panel || !toggle) return;
-  panel.classList.toggle('collapsed', tabColorsCollapsed);
-  toggle.setAttribute('aria-expanded', tabColorsCollapsed ? 'false' : 'true');
-  if(chevron) chevron.classList.toggle('rotated', !tabColorsCollapsed);
+  panel.classList.toggle('collapsed', collapsed);
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if(chevron) chevron.classList.toggle('rotated', !collapsed);
+}
+function applyTabColorsCollapsed(){
+  applyCollapsedSection('tab-colors-list', 'tab-colors-toggle', 'tab-colors-chevron', tabColorsCollapsed);
 }
 function applyMedicinesListCollapsed(){
-  const panel = $('#medicines-list');
-  const toggle = $('#medicines-list-toggle');
-  const chevron = $('#medicines-list-chevron');
-  if(!panel || !toggle) return;
-  panel.classList.toggle('collapsed', medicinesListCollapsed);
-  toggle.setAttribute('aria-expanded', medicinesListCollapsed ? 'false' : 'true');
-  if(chevron) chevron.classList.toggle('rotated', !medicinesListCollapsed);
-}
-function applyDriveBackupCollapsed(){
-  const panel = $('#drive-backup-panel');
-  const toggle = $('#drive-backup-toggle');
-  const chevron = $('#drive-backup-chevron');
-  if(!panel || !toggle) return;
-  panel.classList.toggle('collapsed', driveBackupCollapsed);
-  toggle.setAttribute('aria-expanded', driveBackupCollapsed ? 'false' : 'true');
-  if(chevron) chevron.classList.toggle('rotated', !driveBackupCollapsed);
+  applyCollapsedSection('medicines-list', 'medicines-list-toggle', 'medicines-list-chevron', medicinesListCollapsed);
 }
 function applyCustomMetricsCollapsed(){
-  const panel = $('#custom-metrics-list');
-  const toggle = $('#custom-metrics-toggle');
-  const chevron = $('#custom-metrics-chevron');
-  if(!panel || !toggle) return;
-  panel.classList.toggle('collapsed', customMetricsCollapsed);
-  toggle.setAttribute('aria-expanded', customMetricsCollapsed ? 'false' : 'true');
-  if(chevron) chevron.classList.toggle('rotated', !customMetricsCollapsed);
+  applyCollapsedSection('custom-metrics-list', 'custom-metrics-toggle', 'custom-metrics-chevron', customMetricsCollapsed);
 }
-
 /* ---------------------------------------------------------------------
    Local custom-metric de-duplication (offline-safe cleanup)
 
@@ -549,22 +530,10 @@ let tabColorsCollapsed = true;
 // each time you navigate INTO the Medicines tab (see showPanel below), so
 // the Today checklist is the first thing you see.
 let medicinesListCollapsed = true;
-// Same pattern again for Settings > "Google Drive backup" and "Health
-// parameters" — both start collapsed.
-let driveBackupCollapsed = true;
+// Settings > Health parameters also starts collapsed on each visit.
 let customMetricsCollapsed = true;
-// Locking instantly on every single backgrounding (no grace window at all)
-// turned out to be the wrong trade-off in practice: switching apps for a
-// few seconds, or a refresh, re-locked every time, and since re-locking is
-// what triggers the biometric auto-prompt, that prompt started popping up
-// dozens of times a day instead of feeling like a real "on open" gate.
-// Back to a grace window, just a much longer and more deliberate one than
-// before: reopening within 10 minutes of last being active, in the same
-// still-alive session, skips the lock screen entirely. Two things force a
-// real re-lock regardless of how little time has passed: an explicit "Lock
-// now" tap, and the app process actually having been killed and relaunched
-// (a force-close) — see shouldShowLockOnOpen below for how that's told
-// apart from a normal background/foreground cycle or a page refresh.
+// Reopening within ten minutes in the same browser session skips the lock.
+// A fresh session or an explicit account sign-in requires the account's PIN.
 const LOCK_IDLE_MS = 10 * 60 * 1000;
 // Namespaced per account (like everything in DB) -- switching accounts
 // must always re-prompt for THAT account's own PIN, regardless of whether
@@ -906,7 +875,7 @@ function exitHomeEditMode(){
   homeEditMode = false;
   applyHomeEditModeClass();
   const order = $all('#home-grid .card').map(el => ({ id: el.dataset.type, size: el.dataset.size || 'half' }));
-  DB.saveHomeLayout(order);
+  if(!DB.saveHomeLayout(order)) alert('Could not save the tile layout.');
 }
 const HOME_TILE_SIZES = ['half', 'full', 'tall', 'full-tall'];
 function toggleHomeTileSize(type){
@@ -1039,13 +1008,11 @@ function showPanel(name){
   $('#panel-'+name).classList.add('active');
   $all('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
   if(name === 'settings'){
-    // Tab colors, Google Drive backup, and Health parameters all always
+    // Tab colors and Health parameters always
     // start collapsed on entering Settings, regardless of whatever state
     // you left them in last time.
     tabColorsCollapsed = true;
     applyTabColorsCollapsed();
-    driveBackupCollapsed = true;
-    applyDriveBackupCollapsed();
     customMetricsCollapsed = true;
     applyCustomMetricsCollapsed();
   }
@@ -1078,7 +1045,7 @@ function is24HourFormat(){ return DB.getSettings().timeFormat === '24h'; }
 function timePickerFieldHtml(id, hhmm){
   return `
     <div class="time-picker" data-time-picker="${id}">
-      <input type="hidden" id="${id}" value="${hhmm}">
+      <input type="hidden" id="${id}" value="${escapeHtml(hhmm)}">
       <button type="button" class="time-picker-btn" data-time-picker-btn>
         <span data-time-picker-label>${formatHHMM(hhmm)}</span>
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
@@ -1487,6 +1454,7 @@ function saveMedicineFromSheet(){
   if(!time){ flashSheetError('Pick a time'); return; }
   const dayChips = $all('#medicine-days .chip');
   const selectedDays = dayChips.filter(c=>c.classList.contains('selected')).map(c=>parseInt(c.dataset.day,10));
+  if(!selectedDays.length){ flashSheetError('Choose at least one day'); return; }
   const days = selectedDays.length === 7 ? 'daily' : selectedDays;
   const toneChip = $('#medicine-tone-chips .chip.selected');
   const tone = toneChip ? toneChip.dataset.tone : 'chime';
@@ -1501,7 +1469,7 @@ function saveMedicineFromSheet(){
     updatedAt: Date.now()
   };
   if(idx >= 0) medicines[idx] = medicine; else medicines.push(medicine);
-  DB.saveMedicines(medicines);
+  if(!DB.saveMedicines(medicines)){ flashSheetError("Couldn't save — device storage is unavailable"); return; }
 
   if(window.VitalsDrive && window.VitalsDrive.queueMedicineUpsert) window.VitalsDrive.queueMedicineUpsert(medicine);
 
@@ -1594,7 +1562,7 @@ function saveMetricFromSheet(){
     metrics.push(metric);
   }
 
-  DB.saveCustomMetrics(metrics);
+  if(!DB.saveCustomMetrics(metrics)){ flashSheetError("Couldn't save — device storage is unavailable"); return; }
 
   /*
    * Push this metric definition (e.g. a newly created "Weight") to Drive
@@ -1676,7 +1644,7 @@ async function deleteCurrent(){
     const medicine = DB.getMedicines().find(m=>m.id===id);
     const ok = await showConfirmDialog('Delete medicine?', `Delete "${medicine ? medicine.name : 'this medicine'}"?`);
     if(!ok) return;
-    DB.saveMedicines(DB.getMedicines().filter(m=>m.id!==id));
+    if(!DB.saveMedicines(DB.getMedicines().filter(m=>m.id!==id))){ alert("Couldn't delete this medicine — device storage is unavailable."); return; }
     if(window.VitalsDrive && window.VitalsDrive.queueMedicineDelete) window.VitalsDrive.queueMedicineDelete(id, Date.now());
     renderMedicinesList();
     renderTodayChecklist();
@@ -1687,7 +1655,7 @@ async function deleteCurrent(){
     const name = metric ? metric.name : 'this parameter';
     const ok = await showConfirmDialog(`Delete "${name}"?`, 'Its logged entries will no longer be shown, and this also removes it on your other synced devices.');
     if(!ok) return;
-    DB.saveCustomMetrics(DB.getCustomMetrics().filter(m=>m.id!==id));
+    if(!DB.saveCustomMetrics(DB.getCustomMetrics().filter(m=>m.id!==id))){ alert("Couldn't delete this parameter — device storage is unavailable."); return; }
     if(window.VitalsDrive && window.VitalsDrive.queueMetricDelete) window.VitalsDrive.queueMetricDelete(id, Date.now());
     renderAll();
     renderSettingsPanel();
@@ -1695,7 +1663,7 @@ async function deleteCurrent(){
     const ok = await showConfirmDialog('Delete this entry?', "This can't be undone.");
     if(!ok) return;
     const id = currentEditId;
-    DB.saveEntries(DB.getEntries().filter(e=>e.id!==id));
+    if(!DB.saveEntries(DB.getEntries().filter(e=>e.id!==id))){ alert("Couldn't delete this entry — device storage is unavailable."); return; }
     if(window.VitalsDrive) window.VitalsDrive.queueDelete(id);
     renderAll();
   }
@@ -1779,7 +1747,7 @@ function detailEntryRow(type, e){
   else if(type==='sugar'){ amt = `${e.value} mg/dL`; note = [sugarContextLabel(e.context), e.note].filter(Boolean).join(' · '); }
   else { amt = `${e.value} ${meta ? meta.unit : ''}`.trim(); note = e.note || ''; }
   return `
-    <div class="detail-entry" data-entry-id="${e.id}">
+    <div class="detail-entry" data-entry-id="${escapeHtml(e.id)}">
       <div class="dot${haloFillClass(meta.colorVar)}" style="background:var(${meta.colorVar});"></div>
       <div class="info"><div class="amt">${escapeHtml(amt)}</div>${note?`<div class="note">${escapeHtml(note)}</div>`:''}</div>
       <div class="time">${formatTime(e.ts)}</div>
@@ -2203,9 +2171,13 @@ function setDoseStatus(medId, time, status, dateKey){
   const log = DB.getDoseLog();
   dateKey = dateKey || todayKey();
   const key = doseKeyFor(medId, dateKey, time);
-  const entry = { id:key, medicineId:medId, date:dateKey, time, status, updatedAt:Date.now() };
+  const medicine = DB.getMedicines().find(item => item.id === medId);
+  const entry = {
+    id:key, medicineId:medId, date:dateKey, time, status, updatedAt:Date.now(),
+    medicineName:medicine ? medicine.name : '', medicineDose:medicine ? medicine.dose : ''
+  };
   log[key] = entry;
-  DB.saveDoseLog(log);
+  if(!DB.saveDoseLog(log)){ alert("Couldn't save dose status — device storage is unavailable."); return; }
   if(window.VitalsDrive && window.VitalsDrive.queueDoseLogUpsert) window.VitalsDrive.queueDoseLogUpsert(entry);
   window.dispatchEvent(new CustomEvent('vitals-local-data-changed'));
 }
@@ -2215,7 +2187,7 @@ function clearDoseStatus(medId, time, dateKey){
   const key = doseKeyFor(medId, dateKey, time);
   if(log[key]){
     delete log[key];
-    DB.saveDoseLog(log);
+    if(!DB.saveDoseLog(log)){ alert("Couldn't update dose status — device storage is unavailable."); return; }
   }
   if(window.VitalsDrive && window.VitalsDrive.queueDoseLogDelete) window.VitalsDrive.queueDoseLogDelete(key, Date.now());
 
@@ -2270,7 +2242,7 @@ function doseRowHtml(inst){
   const doseKey = doseKeyFor(inst.medicine.id, todayKey(), inst.medicine.time);
   const skipLabel = inst.status === 'pending' ? 'Skip' : 'Undo';
   return `
-    <div class="dose-row" data-dose-key="${doseKey}" data-med-id="${inst.medicine.id}" data-time="${inst.medicine.time}">
+    <div class="dose-row" data-dose-key="${escapeHtml(doseKey)}" data-med-id="${escapeHtml(inst.medicine.id)}" data-time="${escapeHtml(inst.medicine.time)}">
       <button class="dose-check${iconClass}" data-dose-take aria-label="Mark taken">${iconSvg}</button>
       <div class="alarm-info"><div class="alarm-label">${escapeHtml(inst.medicine.name)}${inst.medicine.dose?` <span style="font-weight:400;color:var(--text-dim);">· ${escapeHtml(inst.medicine.dose)}</span>`:''}</div><div class="alarm-sub">${formatHHMM(inst.medicine.time)}</div></div>
       <button class="dose-skip" data-dose-skip>${skipLabel}</button>
@@ -2344,7 +2316,50 @@ function renderAdherence(){
     </div>`;
 }
 
+// History uses recorded dose marks, not today's enabled schedules.
+// This keeps a past taken/skipped dose visible after a schedule is changed.
+let medicineHistoryDate = null;
+function medicineHistoryRecords(dateKey){
+  const medicines = new Map(DB.getMedicines().map(medicine => [medicine.id, medicine]));
+  return Object.values(DB.getDoseLog()).filter(entry =>
+    entry.date === dateKey && ['taken', 'skipped'].includes(entry.status)
+  ).sort((left, right) => String(left.time).localeCompare(String(right.time))
+    || String(left.medicineName || '').localeCompare(String(right.medicineName || '')))
+    .map(entry => {
+      const medicine = medicines.get(entry.medicineId);
+      return Object.assign({}, entry, {
+        medicineName:entry.medicineName || (medicine && medicine.name) || 'Removed medicine',
+        medicineDose:entry.medicineDose || (medicine && medicine.dose) || ''
+      });
+    });
+}
+function renderMedicineDayHistory(){
+  const input = $('#medicine-history-date');
+  if(!input) return;
+  const today = toDateInputValue(Date.now());
+  medicineHistoryDate = medicineHistoryDate || today;
+  input.max = today;
+  input.value = medicineHistoryDate;
+  const records = medicineHistoryRecords(medicineHistoryDate);
+  for(const status of ['taken', 'skipped']){
+    const list = records.filter(entry => entry.status === status);
+    const label = status === 'taken' ? 'Taken' : 'Skipped';
+    $('#medicine-history-' + status + '-count').textContent = list.length;
+    $('#medicine-history-' + status).innerHTML = list.length ? list.map(entry =>
+      `<div class="medicine-history-row">
+        <span class="medicine-status-square ${status}" aria-hidden="true"></span>
+        <div class="settings-info">
+          <div class="settings-label">${escapeHtml(entry.medicineName)}</div>
+          <div class="settings-sub">${escapeHtml(entry.medicineDose)}${entry.medicineDose ? ' · ' : ''}Scheduled ${escapeHtml(formatHHMM(entry.time))}</div>
+        </div>
+        <span class="settings-sub">${label}</span>
+      </div>`
+    ).join('') : `<p class="empty-hint">No medicines marked ${status} on this date.</p>`;
+  }
+}
+
 function renderTodayChecklist(){
+  renderMedicineDayHistory();
   const box = $('#medicines-today-list');
   if(!box) return;
   const instances = todaysDoseInstances();
@@ -2385,9 +2400,9 @@ function renderMedicinesList(){
   } else {
     box.innerHTML = meds.map(m=>`
       <div class="alarm-row">
-        <div class="switch${m.enabled?' on':''}" data-toggle-medicine="${m.id}"><div class="switch-knob"></div></div>
-        <div class="alarm-info" data-edit-medicine="${m.id}"><div class="alarm-label">${escapeHtml(m.name)}${m.dose?` <span style="font-weight:400;color:var(--text-dim);">· ${escapeHtml(m.dose)}</span>`:''}</div><div class="alarm-sub">${repeatDaysText(m)} · ${formatHHMM(m.time)}</div></div>
-        <button class="alarm-edit" data-med-history="${m.id}" aria-label="View history">
+        <div class="switch${m.enabled?' on':''}" data-toggle-medicine="${escapeHtml(m.id)}"><div class="switch-knob"></div></div>
+        <div class="alarm-info" data-edit-medicine="${escapeHtml(m.id)}"><div class="alarm-label">${escapeHtml(m.name)}${m.dose?` <span style="font-weight:400;color:var(--text-dim);">· ${escapeHtml(m.dose)}</span>`:''}</div><div class="alarm-sub">${repeatDaysText(m)} · ${formatHHMM(m.time)}</div></div>
+        <button class="alarm-edit" data-med-history="${escapeHtml(m.id)}" aria-label="View history">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></svg>
         </button>
       </div>`).join('');
@@ -2398,7 +2413,7 @@ function renderMedicinesList(){
   } else if(Notification.permission === 'denied'){
     hint.textContent = 'Notifications are blocked for this app in your browser settings — medicines will still show in this list, but won’t pop up a notification.';
   } else {
-    hint.textContent = 'Medicines notify you every 5 minutes while a dose is overdue and Vitals has been opened recently, until you mark it taken or skipped. For best results, keep it installed to your home screen and avoid force-closing it.';
+    hint.textContent = 'While Vitals is running, overdue doses remind every 5 minutes until marked taken or skipped. Reminders may stop when the browser is closed or suspended. Use a phone alarm for reminders that must arrive on time.';
   }
   applyMedicinesListCollapsed();
 }
@@ -2499,14 +2514,14 @@ function parseImportTime(raw){
   let m = raw.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
   if(m){
     let h = parseInt(m[1],10); const mi = m[2]; const ap = m[3].toUpperCase();
-    if(h < 1 || h > 12) return null;
+    if(h < 1 || h > 12 || Number(mi) > 59) return null;
     if(ap === 'AM'){ if(h===12) h=0; } else if(h!==12) h+=12;
     return pad2(h)+':'+mi;
   }
   m = raw.match(/^(\d{1,2}):(\d{2})$/);
   if(m){
     const h = parseInt(m[1],10);
-    if(h < 0 || h > 23) return null;
+    if(h < 0 || h > 23 || Number(m[2]) > 59) return null;
     return pad2(h)+':'+m[2];
   }
   return null;
@@ -2562,15 +2577,20 @@ function importMedicinesFromText(){
   }
   const medicines = DB.getMedicines();
   const now = Date.now();
-  parsed.forEach((p, i)=>{
-    const medicine = {
+  const imported = parsed.map((p, i)=>{
+    return {
       id: genId(), name: p.name, dose: '', time: p.time, days: 'daily', tone: 'chime',
       enabled: true, createdAt: now + i, updatedAt: now + i
     };
-    medicines.push(medicine);
-    if(window.VitalsDrive && window.VitalsDrive.queueMedicineUpsert) window.VitalsDrive.queueMedicineUpsert(medicine);
   });
-  DB.saveMedicines(medicines);
+  if(!DB.saveMedicines(medicines.concat(imported))){
+    status.textContent = "Couldn't import — device storage is unavailable. Your pasted schedule is still here.";
+    status.className = 'settings-sub err';
+    return;
+  }
+  if(window.VitalsDrive && window.VitalsDrive.queueMedicineUpsert){
+    imported.forEach(medicine => window.VitalsDrive.queueMedicineUpsert(medicine));
+  }
   renderMedicinesList();
   renderTodayChecklist();
   scheduleAllMedicines();
@@ -2682,23 +2702,40 @@ async function ensureNotificationPermission(){
    runs, since which account is active decides whose namespaced data (and
    whose PIN) everything below this point is even looking at.
    ========================================================================= */
-// Decodes a Google ID token's payload client-side (no signature check).
-// That's deliberate and fine here: this token is never sent anywhere or
-// used to authorize a server — it only feeds this device's OWN display of
-// its OWN signed-in name/email/photo. The real security boundary for this
-// app's data stays the per-account PIN/biometric, same as always.
-function decodeGoogleIdToken(jwt){
+// Verify Google-issued claims before using them to select a local account.
+// This verifies the incoming token; it does not encrypt browser storage.
+let authGateNonce = null;
+async function verifyGoogleIdToken(jwt){
   try{
-    const payload = jwt.split('.')[1];
-    const base64 = payload.replace(/-/g,'+').replace(/_/g,'/');
-    const json = decodeURIComponent(
-      atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
-    );
-    return JSON.parse(json);
-  }catch(e){ return null; }
+    const parts = String(jwt || '').split('.');
+    if(parts.length !== 3) return null;
+    const decode = value => {
+      const raw = value.replace(/-/g, '+').replace(/_/g, '/');
+      return Uint8Array.from(atob(raw), character => character.charCodeAt(0));
+    };
+    const header = JSON.parse(new TextDecoder().decode(decode(parts[0])));
+    const payload = JSON.parse(new TextDecoder().decode(decode(parts[1])));
+    const now = Date.now()/1000;
+    if(header.alg !== 'RS256' || !header.kid || !payload.sub
+      || payload.aud !== window.VitalsDrive.GOOGLE_CLIENT_ID
+      || !['accounts.google.com', 'https://accounts.google.com'].includes(payload.iss)
+      || !Number.isFinite(payload.exp) || payload.exp <= now
+      || !Number.isFinite(payload.iat) || payload.iat > now + 60
+      || !authGateNonce || payload.nonce !== authGateNonce) return null;
+    const response = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+    if(!response.ok) return null;
+    const keys = await response.json();
+    const jwk = (keys.keys || []).find(key => key.kid === header.kid && key.kty === 'RSA');
+    if(!jwk) return null;
+    const algorithm = {name:'RSASSA-PKCS1-v1_5', hash:'SHA-256'};
+    const key = await crypto.subtle.importKey('jwk', jwk, algorithm, false, ['verify']);
+    const valid = await crypto.subtle.verify(algorithm, key, decode(parts[2]),
+      new TextEncoder().encode(parts[0] + '.' + parts[1]));
+    return valid ? payload : null;
+  }catch(error){ return null; }
 }
 async function handleGoogleCredentialResponse(response){
-  const payload = decodeGoogleIdToken(response.credential);
+  const payload = await verifyGoogleIdToken(response.credential);
   if(!payload || !payload.sub){
     const err = $('#auth-gate-error');
     if(err) err.textContent = "Couldn't sign in — please try again.";
@@ -2739,8 +2776,10 @@ function wireAuthGate(){
   const maxAttempts = 40; // ~10s at 250ms
   function tryInit(){
     if(window.google && window.google.accounts && window.google.accounts.id){
+      authGateNonce = randomHex(24);
       google.accounts.id.initialize({
         client_id: clientId,
+        nonce: authGateNonce,
         callback: handleGoogleCredentialResponse,
         auto_select: false
       });
@@ -2813,10 +2852,13 @@ function saveProfile(){
   }
   const selectedChip = $('#profile-gender-chips .chip.selected');
   const ageVal = $('#profile-age').value;
-  DB.saveProfileFields({
+  if(!DB.saveProfileFields({
     gender: selectedChip ? selectedChip.dataset.gender : null,
     age: ageVal !== '' ? Math.max(0, Math.min(130, parseInt(ageVal, 10) || 0)) : null
-  });
+  })){
+    alert('Could not save your profile preferences.');
+    return;
+  }
   renderHeader();
   closeProfile();
 }
@@ -2907,6 +2949,12 @@ function onBackspace(){
 }
 async function handlePinComplete(){
   const settings = DB.getSettings();
+  if(settings.pinLockedUntil && Date.now() < settings.pinLockedUntil){
+    $('#lock-sub').textContent = 'Too many attempts. Try again in a minute.';
+    pinBuffer = '';
+    updatePinDots(0, true);
+    return;
+  }
   if(pendingUnlockAction === 'setup-first'){
     pinFirstEntry = pinBuffer;
     pinBuffer = '';
@@ -2926,16 +2974,29 @@ async function handlePinComplete(){
     const hash = await sha256Hex(pinBuffer + salt);
     const settings2 = DB.getSettings();
     settings2.pinHash = hash; settings2.pinSalt = salt; settings2.onboarded = true;
-    DB.saveSettings(settings2);
+    if(!DB.saveSettings(settings2)){
+      $('#lock-sub').textContent = 'Could not save the passcode. Free up device storage and try again.';
+      pinBuffer = ''; updatePinDots(0, true); return;
+    }
     unlockApp();
     return;
   }
 
   const hash = await sha256Hex(pinBuffer + settings.pinSalt);
   if(hash === settings.pinHash){
+    settings.pinFailures = 0;
+    settings.pinLockedUntil = 0;
+    if(!DB.saveSettings(settings)){ $('#lock-sub').textContent = 'Could not save unlock state. Free up device storage and retry.'; return; }
     unlockApp();
   } else {
-    $('#lock-sub').textContent = 'Incorrect passcode — try again';
+    settings.pinFailures = (settings.pinFailures || 0) + 1;
+    if(settings.pinFailures >= 5){
+      settings.pinFailures = 0;
+      settings.pinLockedUntil = Date.now() + 60000;
+    }
+    DB.saveSettings(settings);
+    $('#lock-sub').textContent = settings.pinLockedUntil > Date.now()
+      ? 'Too many attempts. Try again in a minute.' : 'Incorrect passcode — try again';
     updatePinDots(4, true);
     setTimeout(()=>{ pinBuffer=''; updatePinDots(0,false); $('#lock-sub').textContent='Enter your passcode'; }, 700);
   }
@@ -2951,19 +3012,11 @@ function unlockApp(){
   // The one moment a fresh Drive authentication is allowed to happen
   // automatically: right on unlock, since it's a real user gesture and so
   // is far less likely to be blocked as a pop-up than a background timer.
-  // If it fails, drive.js does not retry on its own — Settings will just
-  // show "Not connected" with a manual Connect button.
+  // If it fails, drive.js does not retry on its own — the top-bar Drive popup
+  // shows "Not connected" with a manual Connect button.
   if(window.VitalsDrive && window.VitalsDrive.reconnectIfNeeded){
     window.VitalsDrive.reconnectIfNeeded().then(()=> renderSettingsPanel());
   }
-}
-function lockAppNow(){
-  // An explicit "Lock now" always means "require real auth next time" --
-  // clear the grace-window flag so even reopening a few seconds later
-  // still shows the lock screen, unlike a normal background/foreground
-  // cycle within the 10-minute window.
-  try{ sessionStorage.removeItem(sessionUnlockedKey()); }catch(e){}
-  startLockFlow();
 }
 function isAppLocked(){
   return !$('#lock').classList.contains('hidden');
@@ -3017,7 +3070,10 @@ async function enableBiometric(){
     const settings = DB.getSettings();
     settings.bioEnabled = true;
     settings.bioCredId = bytesToB64url(new Uint8Array(cred.rawId));
-    DB.saveSettings(settings);
+    if(!DB.saveSettings(settings)){
+      alert('Could not save fingerprint setup. Free up device storage and try again.');
+      return false;
+    }
     return true;
   } catch(e){
     console.warn('Vitals: biometric setup failed', e);
@@ -3159,27 +3215,19 @@ function formatRelativeShort(ts){
   const diffDay = Math.floor(diffHr/24);
   return `${diffDay}d ago`;
 }
-function renderSettingsPanel(){
-  const settings = DB.getSettings();
-  $('#theme-select').value = settings.theme || 'auto';
-  $('#time-format-select').value = settings.timeFormat || '12h';
-  $('#pin-status-sub').textContent = settings.pinHash ? 'Passcode required to open' : 'No passcode set';
-  const bioSupported = !!window.PublicKeyCredential;
-  $('#bio-toggle').classList.toggle('on', !!settings.bioEnabled);
-  $('#bio-status-sub').textContent = !bioSupported ? 'Not supported on this browser'
-    : settings.bioEnabled ? 'Enabled' : 'Not set up';
-
+function renderDriveControls(){
   const driveState = window.VitalsDrive && window.VitalsDrive.getState ? window.VitalsDrive.getState() : null;
   const driveSpinner = $('#drive-sync-spinner');
   if(driveSpinner) driveSpinner.hidden = driveState !== 'syncing';
 
   if(window.VitalsDrive && window.VitalsDrive.isConnected()){
-    $('#drive-status-label').textContent = 'Connected';
+    $('#drive-status-text').textContent = 'Connected';
     const lastSyncAt = window.VitalsDrive.getLastSyncTime ? window.VitalsDrive.getLastSyncTime() : 0;
     const lastSyncSuffix = lastSyncAt ? ` · Last synced ${formatRelativeShort(lastSyncAt)}` : '';
     $('#drive-status-sub').textContent = driveState === 'syncing' ? 'Syncing…' : `New entries back up automatically${lastSyncSuffix}`;
     $('#drive-connect-btn').textContent = 'Disconnect';
     const url = window.VitalsDrive.getSheetUrl();
+    $('#drive-sheet-row').style.display = url ? '' : 'none';
     if(url){
       $('#drive-sheet-row').style.display = '';
       $('#drive-sheet-link').href = url;
@@ -3188,7 +3236,7 @@ function renderSettingsPanel(){
     $('#drive-link-row').style.display = '';
   } else {
     const everConnected = window.VitalsDrive && window.VitalsDrive.hasStoredAuthorization && window.VitalsDrive.hasStoredAuthorization();
-    $('#drive-status-label').textContent = driveState === 'authenticating' ? 'Connecting…' : 'Not connected';
+    $('#drive-status-text').textContent = driveState === 'authenticating' ? 'Connecting…' : 'Not connected';
     $('#drive-status-sub').textContent = driveState === 'authenticating'
       ? 'Waiting for Google…'
       : everConnected
@@ -3201,7 +3249,29 @@ function renderSettingsPanel(){
     $('#drive-link-form').style.display = 'none';
   }
 
-  applyDriveBackupCollapsed();
+  const connected = !!(window.VitalsDrive && window.VitalsDrive.isConnected());
+  const connecting = driveState === 'authenticating';
+  const status = connecting ? 'connecting' : connected ? 'connected' : 'disconnected';
+  const label = connecting ? 'connecting' : connected ? 'connected' : 'not connected';
+  const button = $('#drive-status-btn');
+  button.dataset.status = status;
+  button.setAttribute('aria-label', `Google Drive: ${label}. Open sync options`);
+  button.title = `Google Drive: ${label}`;
+  $('#drive-connect-btn').disabled = connecting;
+}
+
+function renderSettingsPanel(){
+  const settings = DB.getSettings();
+  $('#theme-select').value = settings.theme || 'auto';
+  $('#time-format-select').value = settings.timeFormat || '12h';
+  $('#pin-status-sub').textContent = settings.pinHash ? 'Passcode required to open' : 'No passcode set';
+  const bioSupported = !!window.PublicKeyCredential;
+  $('#bio-toggle').classList.toggle('on', !!settings.bioEnabled);
+  $('#bio-status-sub').textContent = !bioSupported ? 'Not supported on this browser'
+    : settings.bioEnabled ? 'Enabled' : 'Not set up';
+
+  renderDriveControls();
+
   applyCustomMetricsCollapsed();
   applyTabColorsCollapsed();
 
@@ -3223,7 +3293,7 @@ function renderSettingsPanel(){
     ? metrics.map(m=>{
         const meta = getMetricMeta(m.id);
         return `
-          <div class="settings-row" data-edit-metric="${m.id}" style="cursor:pointer;">
+          <div class="settings-row" data-edit-metric="${escapeHtml(m.id)}" style="cursor:pointer;">
             <div class="settings-info">
               <div class="settings-label"><span class="color-dot${haloFillClass(meta.colorVar)}" style="background:var(${meta.colorVar});"></span>${escapeHtml(m.name)}</div>
               <div class="settings-sub">Unit: ${escapeHtml(m.unit)}</div>
@@ -3280,8 +3350,16 @@ function wireEvents(){
   $('#backspace-key').addEventListener('click', onBackspace);
   $('#biometric-key').addEventListener('click', ()=> tryBiometricUnlock(false));
 
-  $('#lock-now-btn').addEventListener('click', lockAppNow);
-  $('#settings-btn').addEventListener('click', ()=> showPanel('settings'));
+  $('#drive-status-btn').addEventListener('click', ()=>{
+    renderDriveControls();
+    $('#drive-dialog').showModal();
+  });
+  $('#drive-dialog-close').addEventListener('click', ()=> $('#drive-dialog').close());
+  $('#drive-dialog').addEventListener('click', e=>{
+    if(e.target !== $('#drive-dialog')) return;
+    const rect = e.target.getBoundingClientRect();
+    if(e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) e.target.close();
+  });
   $('#profile-btn').addEventListener('click', openProfile);
   $('#profile-back').addEventListener('click', closeProfile);
   $('#profile-save-btn').addEventListener('click', saveProfile);
@@ -3373,13 +3451,6 @@ function wireEvents(){
     applyMedicinesListCollapsed();
   });
 
-  const driveBackupToggle = $('#drive-backup-toggle');
-  if(driveBackupToggle){
-    driveBackupToggle.addEventListener('click', ()=>{
-      driveBackupCollapsed = !driveBackupCollapsed;
-      applyDriveBackupCollapsed();
-    });
-  }
 
   const customMetricsToggle = $('#custom-metrics-toggle');
   if(customMetricsToggle){
@@ -3404,7 +3475,7 @@ function wireEvents(){
       if(m){
         m.enabled = !m.enabled;
         m.updatedAt = Date.now();
-        DB.saveMedicines(meds);
+        if(!DB.saveMedicines(meds)){ alert('Could not update this medicine.'); return; }
         if(window.VitalsDrive && window.VitalsDrive.queueMedicineUpsert) window.VitalsDrive.queueMedicineUpsert(m);
         renderMedicinesList(); renderTodayChecklist(); scheduleAllMedicines();
       }
@@ -3431,6 +3502,13 @@ function wireEvents(){
     renderMedicineHistoryDay();
   });
 
+  $('#medicine-history-date').addEventListener('change', e=>{
+    const value = e.target.value;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(value) || value > toDateInputValue(Date.now())) return;
+    medicineHistoryDate = value;
+    renderMedicineDayHistory();
+  });
+
   $('#import-medicines-btn').addEventListener('click', openMedicineImport);
   $('#medicine-import-back').addEventListener('click', closeMedicineImport);
   $('#medicine-import-btn').addEventListener('click', importMedicinesFromText);
@@ -3438,26 +3516,26 @@ function wireEvents(){
   $('#theme-select').addEventListener('change', (e)=>{
     const settings = DB.getSettings();
     settings.theme = e.target.value;
-    DB.saveSettings(settings);
+    if(!DB.saveSettings(settings)){ alert('Could not save appearance preferences.'); return; }
     applyTheme(settings.theme);
   });
   $('#time-format-select').addEventListener('change', (e)=>{
     const settings = DB.getSettings();
     settings.timeFormat = e.target.value;
-    DB.saveSettings(settings);
+    if(!DB.saveSettings(settings)){ alert('Could not save time preferences.'); return; }
     renderAll();
   });
   $('#change-pin-btn').addEventListener('click', ()=>{
     const settings = DB.getSettings();
     settings.pinHash = null; settings.pinSalt = null;
-    DB.saveSettings(settings);
+    if(!DB.saveSettings(settings)){ alert('Could not update the passcode.'); return; }
     startLockFlow();
   });
   $('#bio-toggle').addEventListener('click', async ()=>{
     const settings = DB.getSettings();
     if(settings.bioEnabled){
       settings.bioEnabled = false; settings.bioCredId = null;
-      DB.saveSettings(settings);
+      if(!DB.saveSettings(settings)){ alert('Could not update fingerprint preferences.'); return; }
       renderSettingsPanel();
     } else {
       const ok = await enableBiometric();
@@ -3504,18 +3582,6 @@ function wireEvents(){
       btn.textContent = originalLabel;
     }
   });
-  // Optional manual "Sync now" control — wired only if index.html defines
-  // it, so this stays a no-op on markup that doesn't have it yet. Kept
-  // conceptually separate from Connect: this only asks for a data sync,
-  // never for authentication.
-  const driveSyncBtn = $('#drive-sync-btn');
-  if(driveSyncBtn){
-    driveSyncBtn.addEventListener('click', ()=>{
-      if(!window.VitalsDrive) return;
-      window.VitalsDrive.syncNow(true);
-    });
-  }
-
   // "Already using Vitals elsewhere?" — links this device to a spreadsheet
   // ID/URL pasted from another device's "Open your Sheet" link, for the
   // case where each device's narrow 'drive.file' authorization couldn't
@@ -3568,7 +3634,7 @@ function wireEvents(){
     if(swatch) setTabColor(swatch.dataset.recolor, swatch.dataset.color);
   });
 
-  window.addEventListener('vitals-drive-status', renderSettingsPanel);
+  window.addEventListener('vitals-drive-status', renderDriveControls);
 
   document.addEventListener('visibilitychange', ()=>{
     if(document.visibilityState === 'visible'){

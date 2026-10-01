@@ -610,6 +610,36 @@ main:has(> #panel-home.active){overflow:hidden;}
   font-weight:650;cursor:pointer;text-decoration:none;white-space:nowrap;
 }
 .mini-btn:active{background:var(--surface);}
+
+/* Larger type and touch targets in Settings only. Other screens retain
+   their existing layout. Wrapping keeps long labels usable on phones. */
+#panel-settings .settings-row{gap:14px;padding:18px 2px;flex-wrap:wrap;}
+#panel-settings .settings-info{flex:1 1 180px;overflow-wrap:anywhere;}
+#panel-settings .settings-label{font-size:18px;line-height:1.4;font-weight:700;}
+#panel-settings .settings-sub,
+#panel-settings .hint-block,
+#panel-settings .empty-hint{font-size:16px;line-height:1.6;color:var(--text);}
+#panel-settings .settings-sub{margin-top:7px;}
+#panel-settings .section-title,
+#panel-settings .collapsible-toggle,
+#panel-settings .collapsible-toggle-inline{font-family:var(--font-body);font-size:16px;line-height:1.5;font-weight:700;letter-spacing:.02em;color:var(--text);}
+#panel-settings .mini-btn,
+#panel-settings .select-input,
+#panel-settings .save-btn,
+#panel-settings .note-input{font-size:17px;line-height:1.4;min-height:44px;padding:10px 14px;box-sizing:border-box;max-width:100%;}
+#panel-settings .mini-btn{display:inline-flex;align-items:center;justify-content:center;}
+#panel-settings .select-input{flex-shrink:0;}
+#panel-settings .link{font-size:16px;min-height:44px;display:inline-flex;align-items:center;}
+#panel-settings .collapsible-toggle,
+#panel-settings .collapsible-toggle-inline{min-height:44px;text-align:left;}
+#panel-settings .tabcolor-row .settings-label{font-size:18px;}
+#panel-settings .tabcolor-row{padding:18px 2px;gap:14px;}
+#panel-settings .swatch{width:44px;height:44px;}
+#panel-settings :is(button,a,select,input,[role="button"]):focus-visible{outline:3px solid var(--text);outline-offset:3px;}
+@media (max-width:380px){
+  #panel-settings .settings-info{flex-basis:100%;}
+  #panel-settings .section-title{flex-wrap:wrap;gap:8px;}
+}
 .sync-spinner{
   display:inline-block;width:11px;height:11px;margin-left:7px;border-radius:50%;
   border:1.6px solid var(--hairline-2);border-top-color:var(--blue);

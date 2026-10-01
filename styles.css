@@ -1029,3 +1029,42 @@ a{color:var(--blue);}
 .medicine-status-square{display:inline-block;width:13px;height:13px;border-radius:2px;flex-shrink:0;}
 .medicine-status-square.taken{background:#16a34a;}
 .medicine-status-square.skipped{background:#dc2626;}
+
+/* Readable medicine schedules, dose history, and medicine-related forms. */
+#panel-medicines .alarm-label,
+#panel-medicines .settings-label,
+#panel-medicines .medicine-history-heading{font-size:18px;line-height:1.45;font-weight:700;}
+#panel-medicines .alarm-label span{color:var(--text) !important;}
+#panel-medicines .alarm-sub,
+#panel-medicines .settings-sub,
+#panel-medicines .empty-hint,
+#panel-medicines .hint-block,
+#panel-medicines .adherence-text .s{font-size:16px;line-height:1.6;color:var(--text);letter-spacing:normal;}
+#panel-medicines .adherence-text .n{font-size:20px;line-height:1.4;}
+#panel-medicines .section-title,
+#panel-medicines .collapsible-toggle-inline,
+#panel-medicines .dose-time-header span{font-family:var(--font-body);font-size:16px;line-height:1.5;font-weight:700;letter-spacing:.02em;color:var(--text);}
+#panel-medicines .section-title{flex-wrap:wrap;gap:8px;}
+#panel-medicines .link,
+#panel-medicines .dose-skip{font-size:17px;line-height:1.4;min-height:44px;display:inline-flex;align-items:center;}
+#panel-medicines .dose-skip{padding:10px 12px;box-sizing:border-box;color:var(--text);}
+#panel-medicines .collapsible-toggle-inline{min-height:44px;text-align:left;}
+#panel-medicines .dose-check{width:44px;height:44px;flex-shrink:0;}
+#panel-medicines .alarm-edit{min-width:44px;min-height:44px;color:var(--text);}
+#panel-medicines .alarm-row,
+#panel-medicines .dose-row{padding:18px 2px;gap:10px;flex-wrap:wrap;}
+#panel-medicines .alarm-info{flex:1 1 140px;overflow-wrap:anywhere;}
+#panel-medicines .medicine-history-row{padding:16px 0;flex-wrap:wrap;}
+#panel-medicines .settings-info{min-width:0;overflow-wrap:anywhere;}
+#panel-medicines .medicine-history-heading span:last-child{color:var(--text);}
+#panel-medicines .medicine-status-square{width:17px;height:17px;}
+#panel-medicines .note-input{font-size:17px;line-height:1.4;min-height:44px;box-sizing:border-box;max-width:100%;}
+.medicine-history-toggle{cursor:pointer;list-style:none;min-height:44px;}
+.medicine-history-toggle::-webkit-details-marker{display:none;}
+.medicine-history-toggle::after{content:'+';font-size:24px;margin-left:auto;}
+#medicine-day-history-section[open] > .medicine-history-toggle::after{content:'−';}
+#panel-medicines :is(button,input,summary):focus-visible{outline:3px solid var(--text);outline-offset:3px;}
+:is(#medicine-history,#medicine-import,#sheet:has(#medicine-name)) :is(.field-label,.detail-list-title,.settings-sub,.hint-block,.empty-hint,.alarm-sub){font-size:16px;line-height:1.6;color:var(--text);}
+:is(#medicine-history,#medicine-import,#sheet:has(#medicine-name)) :is(input,textarea,.chip,.mini-btn,.save-btn,.time-picker-btn,.dose-skip){font-size:17px;line-height:1.4;min-height:44px;}
+#medicine-history .alarm-label{font-size:18px;line-height:1.45;}
+#medicine-history .dose-check{width:44px;height:44px;}

@@ -23,6 +23,11 @@ async function scenario(latest, editing, offline=false){
   return {get refreshed(){return refreshed;},probe,closeForm(){editing=false;interval();}};
 }
 (async()=>{
+  const medicineHistory = read('index.html').match(/<details\b[^>]*id="medicine-day-history-section"[^>]*>/);
+  assert(medicineHistory, 'Dose history has a native keyboard-accessible disclosure');
+  assert(!/\bopen\b/.test(medicineHistory[0]), 'Dose history defaults to collapsed');
+  assert(read('styles.css').includes('#panel-medicines .alarm-label'), 'Larger type is scoped to Medicines');
+  console.log('PASS medicine accessibility: dose history collapsed by default and larger type scoped to Medicines.');
   const same=await scenario('old',false); assert.equal(same.refreshed,null);
   const newer=await scenario('new',false); assert(newer.refreshed.includes('__vitals_release=new'));
   assert.equal(newer.probe.options.cache,'no-store'); assert(newer.probe.url.includes('__vitals_check='));

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Vitals</title>
-<meta name="vitals-release" content="20261001.2">
+<meta name="vitals-release" content="20261001.3">
 <meta name="description" content="A private, offline-first health log for fluid intake, urine output, blood pressure, sugar, and a medicine adherence checklist.">
 <meta name="theme-color" content="#F2F3F6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0A0B0F" media="(prefers-color-scheme: dark)">
@@ -24,7 +24,7 @@
      CACHE_NAME in service-worker.js) together on every future update,
      even ones that only touch app.js — a stale cached app.js next to a
      fresh index.html is how a brand-new button can render but do nothing. -->
-<link rel="stylesheet" href="styles.css?v=21">
+<link rel="stylesheet" href="styles.css?v=22">
 </head>
 <body>
 
@@ -135,7 +135,8 @@
       <div class="trend-card glass-card collapsed" id="medicines-list" style="padding:4px 16px;">
         <p class="empty-hint">No medicines yet.</p>
       </div>
-      <div class="section-title">Dose history</div>
+      <details id="medicine-day-history-section">
+      <summary class="section-title medicine-history-toggle">Dose history</summary>
       <div class="trend-card medicine-day-history">
         <label class="settings-label" for="medicine-history-date">Choose a date</label>
         <input class="note-input" id="medicine-history-date" type="date">
@@ -144,6 +145,7 @@
         <h3 class="medicine-history-heading"><span class="medicine-status-square skipped" aria-hidden="true"></span>Skipped <span id="medicine-history-skipped-count">0</span></h3>
         <div id="medicine-history-skipped" aria-live="polite"></div>
       </div>
+      </details>
       <p class="hint-block" id="notif-hint"></p>
     </section>
 
